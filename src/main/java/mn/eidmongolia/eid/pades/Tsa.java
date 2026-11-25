@@ -7,8 +7,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.GregorianCalendar;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.regex.Matcher;
@@ -100,7 +102,9 @@ final class Asn1Time {
         if (!m.matches()) throw new IllegalArgumentException("ASN.1 time " + s);
         int year = Integer.parseInt(m.group(1));
         if (utc) year += year < 50 ? 2000 : 1900;
-        Calendar c = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+        // Always Gregorian: Calendar.getInstance(zone) follows the default locale (th_TH → Buddhist era, ja_JP_JP →
+        // Japanese imperial) and would shift every certificate / CRL / OCSP / TSA time by centuries.
+        Calendar c = new GregorianCalendar(TimeZone.getTimeZone("UTC"), Locale.ROOT);
         c.clear();
         c.set(year, Integer.parseInt(m.group(2)) - 1, Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)),
             Integer.parseInt(m.group(5)), m.group(6) == null ? 0 : Integer.parseInt(m.group(6)));

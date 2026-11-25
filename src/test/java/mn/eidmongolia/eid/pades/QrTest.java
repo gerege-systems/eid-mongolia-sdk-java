@@ -143,4 +143,38 @@ public class QrTest {
     public void citizenIssuingCaSkiMatchesEmbedded04() {
         assertEquals(EidQr.CITIZEN_ISSUING_CA_SKI, Text.hex(EidChain.intermediates().get(2).subjectKeyId()));
     }
+
+    /** exp far in the past must not wrap (exp + skew) × 1000 into the future (Go: QR_EXPIRED). */
+    @Test
+    public void farPastExpIsExpired() {
+        Json.Obj v = (Json.Obj) Json.parse(Golden.resource("myqr_vectors.json"));
+        String issuer = v.getString("issuer");
+        Json.Obj ok = null;
+        for (Object o : v.getArr("verify")) {
+            Json.Obj c = (Json.Obj) o;
+            if (c.getObj("expect").optNonEmpty("error") == null) {
+                ok = c;
+                break;
+            }
+        }
+        if (ok == null) throw new AssertionError("no OK verify vector");
+        Json.Obj e = ok.getObj("expect");
+        EidQr.Expect exp = new EidQr.Expect(e.getString("rpUUID"), e.getString("sessionId"), e.getString("nonce"), issuer,
+            Instant.ofEpochSecond(e.getLong("now")));
+        String payload = new String(java.util.Base64.getUrlDecoder().decode(ok.getString("jws").split("\\.")[1]),
+            java.nio.charset.StandardCharsets.UTF_8);
+        Json.Obj claims = (Json.Obj) Json.parse(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String etsi = claims.getString("sub");
+        // The untouched claims pass; only iat/exp change below.
+        EidQr.checkClaims(claims, exp, etsi, exp.now());
+        long far = -15_000_000_000_000_000L;
+        String bad = payload.replaceFirst("\"iat\":-?\\d+", "\"iat\":" + (far - 300)).replaceFirst("\"exp\":-?\\d+", "\"exp\":" + far);
+        assertTrue(bad, bad.contains("\"exp\":" + far) && bad.contains("\"iat\":" + (far - 300)));
+        try {
+            EidQr.checkClaims((Json.Obj) Json.parse(bad.getBytes(java.nio.charset.StandardCharsets.UTF_8)), exp, etsi, exp.now());
+            throw new AssertionError("far-past exp accepted");
+        } catch (EidQrException x) {
+            assertEquals(EidQrException.EXPIRED, x.code());
+        }
+    }
 }

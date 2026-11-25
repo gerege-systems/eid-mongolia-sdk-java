@@ -365,7 +365,7 @@ public final class EidQr {
         byte[] photo;
     }
 
-    private static Checked checkClaims(Json.Obj c, Expect expect, String etsi, Instant now) {
+    static Checked checkClaims(Json.Obj c, Expect expect, String etsi, Instant now) {
         String iss = expect.issuer() == null || expect.issuer().isEmpty() ? DEFAULT_ISSUER : expect.issuer();
         if (!iss.equals(str(c, "iss"))) throw err(EidQrException.CLAIMS_INVALID, "iss mismatch");
         String sub = str(c, "sub");
@@ -398,7 +398,8 @@ public final class EidQr {
         if (span <= 0 || span > MAX_AGE_SECONDS) throw err(EidQrException.CLAIMS_INVALID, "exp − iat is not in (0, 300]");
         long nowMs = now.toEpochMilli();
         if (iat > (nowMs / 1000.0) + SKEW_SECONDS) throw err(EidQrException.NOT_YET_VALID, "iat in the future");
-        if (!(nowMs < (exp + SKEW_SECONDS) * 1000)) throw err(EidQrException.EXPIRED, "presentation expired");
+        // In seconds as double: (exp + skew) * 1000 wrapped for |exp| > ~9.2e15 and let a far-past exp pass (Go: QR_EXPIRED).
+        if (!(nowMs / 1000.0 < (double) exp + SKEW_SECONDS)) throw err(EidQrException.EXPIRED, "presentation expired");
         // 12.
         Object d = c.get("data");
         if (d == null) throw err(EidQrException.DATA_INVALID, "data missing");
