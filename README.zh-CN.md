@@ -65,30 +65,30 @@ Maven：
 ```java
 import mn.eidmongolia.eid.pades.*;
 
-// 1. Бэлдэх — сүлжээгүй. signerCert = иргэний SIGN гэрчилгээ (RP-API-ийн сессийн хариунаас, DER).
+// 1. 准备——无需网络。signerCert = 公民的 SIGN 证书（来自 RP-API 的 session 响应，DER 格式）。
 Prepared prepared = EidPades.prepare(pdf, PrepareOptions.builder(signCertDer)
-        .reason("Гэрээ баталгаажуулав")
-        .claimedRole(claimedRole)           // байгууллагын нэрийн өмнөөс бол (RP-API representation хариунаас), эс бөгөөс null
-        .verifyPage(true)                   // шалгах (QR) хуудас — зөвхөн эхний eID гарын үсэгт
-        // .verifyPagePosition("first")     // QR хуудас 1-р хуудас болно (анхдагч "last")
-        .fileName("Гэрээ №1.pdf")           // verifyPage = true бол заавал
-        .lang("mn")                         // mn (анхдагч) | en
-        // Сонголттой харагдах гарын үсэг: pt, хуудасны харагдах зүүн доод булангаас; page 0 = eID verify хуудас биш
-        // сүүлийн хуудас. Өндөр ≥ 45 pt; багтахгүй бол REQUEST_INVALID. null = үл харагдах.
+        .reason("合同已确认")
+        .claimedRole(claimedRole)           // 以组织名义签名时使用（来自 RP-API 的 representation 响应），否则为 null
+        .verifyPage(true)                   // 验证（QR）页——仅用于第一个 eID 签名
+        // .verifyPagePosition("first")     // QR 页成为第 1 页（默认 "last"）
+        .fileName("合同第1号.pdf")           // verifyPage = true 时必须提供
+        .lang("mn")                         // mn（默认）| en
+        // 可选的可见签名：单位 pt，自页面可见的左下角起算；page 0 = 最后一页，而不是 eID verify 页
+        // 高度 ≥ 45 pt；放不下则为 REQUEST_INVALID。null = 不可见。
         .appearance(new SignatureAppearance(36, 36, 220, 64))
         .build());
-// prepared.placement() — харагдах гарын үсгийн эцсийн байрлал (доорх «Байршил»).
+// prepared.placement()——可见签名的最终位置（见下文“位置”）。
 
-// 2. prepared.dtbs() (32 байт)-ийг RP-API-ийн signature session-д (RAW_DIGEST_SIGNATURE) өгч утсаар зуруулна, эсвэл
-//    USB токеноор (PKCS#11) зурна. prepared.state()-ийг хүлээх хооронд хадгалж болно (формат нь Go reference-тэй ижил).
+// 2. 将 prepared.dtbs()（32 字节）交给 RP-API 的 signature session（RAW_DIGEST_SIGNATURE），由手机签名，或
+//    使用 USB 令牌（PKCS#11）签名。等待期间可以保存 prepared.state()（格式与 Go reference 相同）。
 
-// 3. Суулгах — TSA, OCSP/CRL сүлжээ (blocking — worker thread дээр). Гарын үсэг: RSA PKCS#1 v1.5, ECDSA r‖s эсвэл DER.
+// 3. 嵌入——使用 TSA、OCSP/CRL 网络（阻塞——请在 worker 线程上执行）。签名：RSA PKCS#1 v1.5、ECDSA r‖s 或 DER。
 Completed done = EidPades.complete(prepared.state(), signature);
 Files.write(Path.of("signed.pdf"), done.pdf());
 
-// 4. Бүртгэх — RP-API POST /pdf/signatures-ийн бие (PDF биш, зөвхөн мета), ЯГ ХЭВЭЭР нь илгээнэ:
-String body = done.registration(sessionId, orgRegNo).toJson();   // medium-ийг sessionId-аас: байвал PHONE, үгүй бол TOKEN
-// эсвэл тодорхой: done.registration(Medium.TOKEN, null, null)
+// 4. 登记——RP-API 的 POST /pdf/signatures 请求体（不是 PDF，仅为元数据），请原样发送：
+String body = done.registration(sessionId, orgRegNo).toJson();   // medium 由 sessionId 推断：有则为 PHONE，否则为 TOKEN
+// 或显式指定： done.registration(Medium.TOKEN, null, null)
 ```
 
 `registration(medium, sessionId, onBehalfOf)` 会在发往 CA 之前抛出 `REQUEST_INVALID`：`Medium.PHONE` 没有
@@ -149,11 +149,11 @@ XObject、annotation 的 `/Rect`），若请求的矩形（+4 pt）与内容重�
 **PS256 JWS**（`typ` = `eidmn-myqr+jwt`，`x5c` = [公民证书, 颁发 CA]）。本库会验证该 JWS：
 
 ```java
-EidQr.Parsed qr = EidQr.parse(scanned);              // QR_FORMAT_INVALID бол RP-API руу явуулахгүй
-// … qr.qr()-ийг POST /authentication/qr-д илгээж, session-ийн үр дүнгээс JWS-ийг авна (RP-API, шууд HTTPS)
+EidQr.Parsed qr = EidQr.parse(scanned);              // 若为 QR_FORMAT_INVALID，则不要发送给 RP-API
+// … 将 qr.qr() 发送到 POST /authentication/qr，并从 session 结果中取得 JWS（RP-API，直接 HTTPS）
 EidQr.Result r = EidQr.verify(jws, new EidQr.Expect(rpUuid, sessionId, nonce));
-for (Map.Entry<String, String> f : r.data()) show(f.getKey(), f.getValue());   // payload-ийн дарааллаар
-// r.source(), r.photo() (JPEG | null), r.signer().etsi(), r.signedAt(), r.sha256() (= CA аудитын qrsha), r.jws()
+for (Map.Entry<String, String> f : r.data()) show(f.getKey(), f.getValue());   // 按 payload 的顺序
+// r.source(), r.photo() (JPEG | null), r.signer().etsi(), r.signedAt()、r.sha256()（= CA 审计中的 qrsha）、r.jws()
 ```
 
 验证（与 Go / TS / .NET 相同，使用 CA 的 `myqr_vectors.json`）：JWS ≤ 512 KiB，3 段 → header 必须恰好是 `alg` PS256 / `typ` /

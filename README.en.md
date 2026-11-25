@@ -65,30 +65,30 @@ every release).
 ```java
 import mn.eidmongolia.eid.pades.*;
 
-// 1. Бэлдэх — сүлжээгүй. signerCert = иргэний SIGN гэрчилгээ (RP-API-ийн сессийн хариунаас, DER).
+// 1. Prepare — no network. signerCert = the citizen's SIGN certificate (from the RP-API session response, DER).
 Prepared prepared = EidPades.prepare(pdf, PrepareOptions.builder(signCertDer)
-        .reason("Гэрээ баталгаажуулав")
-        .claimedRole(claimedRole)           // байгууллагын нэрийн өмнөөс бол (RP-API representation хариунаас), эс бөгөөс null
-        .verifyPage(true)                   // шалгах (QR) хуудас — зөвхөн эхний eID гарын үсэгт
-        // .verifyPagePosition("first")     // QR хуудас 1-р хуудас болно (анхдагч "last")
-        .fileName("Гэрээ №1.pdf")           // verifyPage = true бол заавал
-        .lang("mn")                         // mn (анхдагч) | en
-        // Сонголттой харагдах гарын үсэг: pt, хуудасны харагдах зүүн доод булангаас; page 0 = eID verify хуудас биш
-        // сүүлийн хуудас. Өндөр ≥ 45 pt; багтахгүй бол REQUEST_INVALID. null = үл харагдах.
+        .reason("Contract confirmed")
+        .claimedRole(claimedRole)           // when signing on behalf of an organization (from the RP-API representation response), otherwise null
+        .verifyPage(true)                   // the verification (QR) page — only for the first eID signature
+        // .verifyPagePosition("first")     // the QR page becomes page 1 (default "last")
+        .fileName("Contract No. 1.pdf")           // required if verifyPage = true
+        .lang("mn")                         // mn (default) | en
+        // Optional visible signature: pt, from the visible bottom-left corner of the page; page 0 = the last page, NOT the eID verify page
+        // Height ≥ 45 pt; REQUEST_INVALID if it does not fit. null = invisible.
         .appearance(new SignatureAppearance(36, 36, 220, 64))
         .build());
-// prepared.placement() — харагдах гарын үсгийн эцсийн байрлал (доорх «Байршил»).
+// prepared.placement() — the final placement of the visible signature (see "Placement" below).
 
-// 2. prepared.dtbs() (32 байт)-ийг RP-API-ийн signature session-д (RAW_DIGEST_SIGNATURE) өгч утсаар зуруулна, эсвэл
-//    USB токеноор (PKCS#11) зурна. prepared.state()-ийг хүлээх хооронд хадгалж болно (формат нь Go reference-тэй ижил).
+// 2. Give prepared.dtbs() (32 bytes) to the RP-API's signature session (RAW_DIGEST_SIGNATURE) so it is signed on the phone, or
+//    sign with a USB token (PKCS#11). prepared.state() may be stored while waiting (its format is identical to the Go reference).
 
-// 3. Суулгах — TSA, OCSP/CRL сүлжээ (blocking — worker thread дээр). Гарын үсэг: RSA PKCS#1 v1.5, ECDSA r‖s эсвэл DER.
+// 3. Embed — TSA, OCSP/CRL network (blocking — on a worker thread). Signature: RSA PKCS#1 v1.5, ECDSA r‖s or DER.
 Completed done = EidPades.complete(prepared.state(), signature);
 Files.write(Path.of("signed.pdf"), done.pdf());
 
-// 4. Бүртгэх — RP-API POST /pdf/signatures-ийн бие (PDF биш, зөвхөн мета), ЯГ ХЭВЭЭР нь илгээнэ:
-String body = done.registration(sessionId, orgRegNo).toJson();   // medium-ийг sessionId-аас: байвал PHONE, үгүй бол TOKEN
-// эсвэл тодорхой: done.registration(Medium.TOKEN, null, null)
+// 4. Register — the body of the RP-API POST /pdf/signatures (not the PDF, metadata only), send it EXACTLY AS IS:
+String body = done.registration(sessionId, orgRegNo).toJson();   // medium derived from sessionId: PHONE if present, otherwise TOKEN
+// or explicitly: done.registration(Medium.TOKEN, null, null)
 ```
 
 `registration(medium, sessionId, onBehalfOf)` throws `REQUEST_INVALID` before anything goes to the CA when: `Medium.PHONE` without
@@ -149,11 +149,11 @@ The citizen shows "My QR" in the eID app (`EIDMN-QR1:<token>`) → the RP scans 
 **PS256 JWS** signed with the citizen's QUALIFIED SIGN key (`typ` = `eidmn-myqr+jwt`, `x5c` = [the citizen's certificate, the issuing CA]). This library verifies the JWS:
 
 ```java
-EidQr.Parsed qr = EidQr.parse(scanned);              // QR_FORMAT_INVALID бол RP-API руу явуулахгүй
-// … qr.qr()-ийг POST /authentication/qr-д илгээж, session-ийн үр дүнгээс JWS-ийг авна (RP-API, шууд HTTPS)
+EidQr.Parsed qr = EidQr.parse(scanned);              // if QR_FORMAT_INVALID, do not send it to the RP-API
+// … send qr.qr() to POST /authentication/qr and take the JWS from the session result (RP-API, direct HTTPS)
 EidQr.Result r = EidQr.verify(jws, new EidQr.Expect(rpUuid, sessionId, nonce));
-for (Map.Entry<String, String> f : r.data()) show(f.getKey(), f.getValue());   // payload-ийн дарааллаар
-// r.source(), r.photo() (JPEG | null), r.signer().etsi(), r.signedAt(), r.sha256() (= CA аудитын qrsha), r.jws()
+for (Map.Entry<String, String> f : r.data()) show(f.getKey(), f.getValue());   // in payload order
+// r.source(), r.photo() (JPEG | null), r.signer().etsi(), r.signedAt(), r.sha256() (= the CA's audit qrsha), r.jws()
 ```
 
 Verification (the same as Go / TS / .NET, using the CA's `myqr_vectors.json`): JWS ≤ 512 KiB, 3 segments → the header is exactly `alg` PS256 / `typ` /
