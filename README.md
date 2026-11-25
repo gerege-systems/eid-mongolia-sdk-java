@@ -1,3 +1,5 @@
+Монгол · [English](README.en.md) · [中文](README.zh-CN.md)
+
 # eid-mongolia-sdk-java
 
 **eID Mongolia** client-side PAdES — Java (JVM, server-side) SDK. PDF баримт eID сервер рүү **хэзээ ч явахгүй**:
@@ -24,8 +26,6 @@
 [Android](https://github.com/gerege-systems/eid-mongolia-sdk-android) ·
 [Swift](https://github.com/gerege-systems/eid-mongolia-sdk-swift) ·
 [Node.js/TypeScript](https://github.com/gerege-systems/eid-mongolia-sdk).
-
-[English summary](#english)
 
 ## Суулгах (JitPack)
 
@@ -196,20 +196,4 @@ MIT — [LICENSE](LICENSE). Фонт: SIL Open Font License 1.1 (`src/main/resou
 
 ## English
 
-Client-side PAdES for eID Mongolia in plain Java 17 (JVM, server-side), with **zero runtime dependencies**
-(`java.security` + a small DER writer; no BouncyCastle, Jackson or Kotlin). The PDF never leaves your backend: `prepare`
-writes the signature revision (optionally a bilingual verification page with a QR code and a visible stamp that avoids
-page content) and returns the 32-byte DTBS; the citizen signs it on their phone (RP-API signature session,
-`RAW_DIGEST_SIGNATURE`) or USB token; `complete` verifies the signature, gets an RFC 3161 timestamp, embeds the CAdES
-CMS, collects OCSP/CRL and appends a DSS revision (PAdES-BASELINE-LT). `Completed.registration(...)` builds the
-`POST /pdf/signatures` body (`toJson()`; medium PHONE ⇔ sessionId, TOKEN without). `EidQr.parse` / `EidQr.verify` check the
-«My QR» PS256 JWS presentation (contract `myqr-2026-10-26`).
-
-**There is no RP-API client in this library** — call the RP-API directly over HTTPS/JSON
-(<https://developer.eidmongolia.mn/#overview>). Install from JitPack: add `https://jitpack.io` and
-`com.github.gerege-systems:eid-mongolia-sdk-java:<tag>` (tags have no `v` prefix); jars are also attached to every GitHub
-Release. This is a native port of the Go reference (`eid-mongolia-sdk-go/pades`, profile `pades-client/1`); CI proves
-byte-identical output against the Go golden vectors on Linux and Windows (Java 17 and 21). No validator is shipped —
-verification is a hash lookup against the CA registry; full cryptographic validation lives in the Go backend SDK.
-Thread-safe, no global mutable state. Errors are unchecked `EidPadesException` / `EidQrException` with a stable `code()`.
-Sibling SDKs: Go, .NET, Android, Swift, Node.js/TypeScript (links above).
+Full English translation: [README.en.md](README.en.md).
