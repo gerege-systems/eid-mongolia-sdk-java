@@ -66,6 +66,9 @@ final class PdfReader {
     final boolean xrefIsStream;
     final Map<Integer, XrefEntry> xref;
     private final Map<PdfRef, PdfObj> cache = new HashMap<>();
+    /** Objects being parsed right now (re-entry guard, see [obj]). */
+    private final Set<PdfRef> loading = new HashSet<>();
+    private static final int MAX_LOADING = 64;
     private final Map<Integer, ObjStm> objStmCache = new HashMap<>();
 
     private PdfReader(byte[] bytes, String version, PdfDict trailer, int startXref, boolean xrefIsStream, Map<Integer, XrefEntry> xref) {
@@ -252,7 +255,11 @@ final class PdfReader {
                 int type = field(raw, p, w.get(0), 1);
                 int f2 = field(raw, p, w.get(1), 0);
                 int f3 = field(raw, p, w.get(2), 0);
-                int id = start + k;
+                long id64 = (long) start + k;
+                // PRECHECKS #2b caps /Size at 2^21: a valid id is below it. A hostile /Index count (e.g. [0 67108864]
+                // over a small zlib bomb) would otherwise allocate one map entry per row.
+                if (id64 < 0 || id64 >= Structure.MAX_XREF_SIZE) continue;
+                int id = (int) id64;
                 if (out.containsKey(id)) continue;
                 if (type == 1) {
                     if (f2 > 0) out.put(id, XrefEntry.offset(f2, f3));
@@ -358,13 +365,21 @@ final class PdfReader {
         if (hit != null) return hit;
         XrefEntry entry = xref.get(ref.id());
         if (entry == null) return PdfObj.NULL;
+        // A stream's /Length (or its object stream) may refer back to an object still being parsed — `3 0 obj
+        // <</Length 3 0 R>>` recursed until StackOverflowError (an Error, past every catch). Re-entry and deep chains
+        // fail as PdfException instead (the /Length lookup then falls back to scanning for endstream, like Go's lazy one).
+        if (loading.size() >= MAX_LOADING || !loading.add(ref)) throw new PdfException("object " + ref.id() + " refers to itself");
         PdfObj o;
-        if (!entry.compressed) {
-            if (entry.gen != ref.gen()) return PdfObj.NULL;
-            o = parseIndirect(entry.off, ref.id());
-        } else {
-            if (ref.gen() != 0) return PdfObj.NULL;
-            o = objectFromStream(entry.stream, entry.index, ref.id());
+        try {
+            if (!entry.compressed) {
+                if (entry.gen != ref.gen()) return PdfObj.NULL;
+                o = parseIndirect(entry.off, ref.id());
+            } else {
+                if (ref.gen() != 0) return PdfObj.NULL;
+                o = objectFromStream(entry.stream, entry.index, ref.id());
+            }
+        } finally {
+            loading.remove(ref);
         }
         cache.put(ref, o);
         return o;

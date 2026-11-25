@@ -457,17 +457,18 @@ final class Appearance {
         }
         if (!(annots instanceof PdfObj.Arr)) return false;
         List<PdfObj> items = ((PdfObj.Arr) annots).items();
-        for (int i = 0; i < Math.min(items.size(), 10_000); i++) {
-            try {
+        // Go reads the whole list under one recover(): an unreadable annotation ends the scan with false for the page.
+        try {
+            for (int i = 0; i < Math.min(items.size(), 10_000); i++) {
                 PdfDict a = rd.resolve(items.get(i)).dict();
                 if (a == null || !"Link".equals(rd.get(a, "Subtype").name())) continue;
                 PdfDict act = rd.get(a, "A").dict();
                 if (act == null || !"URI".equals(rd.get(act, "S").name())) continue;
                 PdfObj uri = rd.get(act, "URI");
                 if (uri instanceof PdfObj.Str && Arrays.equals(((PdfObj.Str) uri).bytes(), want)) return true;
-            } catch (Exception e) {
-                // unreadable annotation — not a verify link
             }
+        } catch (Exception e) {
+            return false;
         }
         return false;
     }
