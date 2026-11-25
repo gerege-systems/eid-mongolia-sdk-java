@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+src/test/resources/** -text
+src/main/resources/** -text
+*.pdf binary
+*.der binary
+*.jar binary
+*.zlib binary

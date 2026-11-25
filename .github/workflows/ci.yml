@@ -1,0 +1,70 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  test:
+    # Byte-identical conformance: the Go reference golden vectors (src/test/resources/golden) on Linux and Windows,
+    # Java 17 (the release level) and 21.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        java: ["17", "21"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - uses: gradle/actions/setup-gradle@v4
+      - name: build + golden tests
+        shell: bash
+        run: ./gradlew build --no-daemon --console=plain
+      # Replays the JitPack build (the publication must not break).
+      - name: publishToMavenLocal
+        if: matrix.os == 'ubuntu-latest' && matrix.java == '17'
+        run: ./gradlew publishToMavenLocal -x test --no-daemon --console=plain
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest' && matrix.java == '17'
+        with:
+          name: jars
+          path: build/libs/*.jar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.java }}
+          path: build/test-results/
+
+  golden-sync:
+    # The vendored golden = the Go repo tag in golden/SOURCE (byte for byte, private keys stripped).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/sync-pades-golden.sh --check
+
+  changelog:
+    # Every PR adds a changelog.d/ fragment; CHANGELOG.md is edited only on release/* branches.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - shell: bash
+        run: |
+          base="origin/${{ github.base_ref }}"
+          changed=$(git diff --name-only "$base"...HEAD)
+          echo "$changed"
+          if ! echo "$changed" | grep -qE '^changelog\.d/[0-9]{4}-[0-9]{2}-[0-9]{2}-.+\.md$'; then
+            echo "::error::add a changelog.d/<YYYY-MM-DD>-<topic>.md fragment"; exit 1
+          fi
+          if git diff --name-only --diff-filter=M "$base"...HEAD | grep -qx 'CHANGELOG.md' && [[ "${{ github.head_ref }}" != release/* ]]; then
+            echo "::error::CHANGELOG.md is edited only on release/* branches"; exit 1
+          fi
