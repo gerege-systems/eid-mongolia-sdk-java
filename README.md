@@ -40,7 +40,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.1.0")
+    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.1.1")
 }
 ```
 
@@ -53,7 +53,7 @@ Maven:
 <dependency>
   <groupId>com.github.gerege-systems</groupId>
   <artifactId>eid-mongolia-sdk-java</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
 </dependency>
 ```
 
