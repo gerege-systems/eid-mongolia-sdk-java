@@ -321,6 +321,24 @@ public class V4Test {
         assertEquals(Golden.time("2026-10-14T04:00:00Z"), Asn1Time.parse(Der.parse(Der.tlv(Der.GENERALIZED_TIME, Golden.ascii("20261014040000Z")))));
     }
 
+    /** ASN.1 times are Gregorian whatever the JVM default locale (th_TH → Buddhist, ja_JP_JP → Japanese imperial). */
+    @Test
+    public void asn1TimeIgnoresDefaultLocale() {
+        java.util.Locale saved = java.util.Locale.getDefault();
+        try {
+            for (java.util.Locale l : new java.util.Locale[] {new java.util.Locale("th", "TH"), new java.util.Locale("ja", "JP", "JP"),
+                java.util.Locale.forLanguageTag("en-US-u-ca-buddhist")}) {
+                java.util.Locale.setDefault(l);
+                assertEquals(l.toString(), Golden.time("2026-10-14T04:00:00Z"),
+                    Asn1Time.parse(Der.parse(Der.tlv(Der.GENERALIZED_TIME, Golden.ascii("20261014040000Z")))));
+                assertEquals(l.toString(), Golden.time("2026-10-14T04:00:00Z"),
+                    Asn1Time.parse(Der.parse(Der.tlv(Der.UTC_TIME, Golden.ascii("261014040000Z")))));
+            }
+        } finally {
+            java.util.Locale.setDefault(saved);
+        }
+    }
+
     // Chain building (Go CheckSignatureFrom / Verify)
 
     @Test

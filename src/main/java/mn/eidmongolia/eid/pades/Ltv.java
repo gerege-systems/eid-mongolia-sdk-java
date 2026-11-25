@@ -1,6 +1,7 @@
 package mn.eidmongolia.eid.pades;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -38,6 +39,12 @@ final class CertificateRevoked extends IOException {
 /**
  * B-LT collection — Go reference `pades/ltv.go`: OCSP (SHA-1 CertID) and CRL (CDP) per chain certificate, checked for
  * signature/issuer, CertID, freshness at the current time; fail-closed; revoked → [CertificateRevoked].
+ *
+ * <p>Order by certificate role (Go `pades-golden-v11`, PROFILE.md §8): the first certificate of each chain (end entity —
+ * signer, TSA) asks its OCSP first (full timeout, freshness/retry rule) and then its CRL. A CA certificate (every later
+ * position) fetches its CRL first and sends no OCSP request at all when a valid CRL is obtained; only without one does it
+ * fall back to its OCSP. A CA OCSP responder that accepts the connection and never answers then no longer stalls signing.
+ * An interrupted caller gets {@link InterruptedIOException} (interrupt flag kept) instead of a missing-revocation error.
  */
 final class Ltv {
     static final class NotFresh extends IOException {
@@ -105,37 +112,22 @@ final class Ltv {
                     }
                 }
                 if (issuer == null) throw new Incomplete("issuer of " + c.serialRef() + " not found");
-                boolean ok = false;
-                NotFresh freshErr = null;
                 Date fresh = i == 0 ? after : null;
-                for (String u : c.ocspServers()) {
-                    try {
-                        Object[] r = fetchOcsp(f, u, c, issuer, now, fresh);
-                        add(d.ocsps, (byte[]) r[0]);
-                        Ocsp.Response resp = (Ocsp.Response) r[1];
-                        if (resp.certificate != null && !resp.certificate.equals(issuer)) add(d.certs, resp.certificate.raw); // delegated responder
-                        ok = true;
-                        break;
-                    } catch (CertificateRevoked e) {
-                        throw e;
-                    } catch (NotFresh e) {
-                        freshErr = e;
-                    } catch (Exception e) {
-                        // next responder
-                    }
+                Found r = new Found();
+                if (i == 0) {
+                    // End entity (signer / TSA leaf): OCSP first, full timeout, then the CRL — both embedded.
+                    ocsp(f, c, issuer, now, fresh, d, r);
+                    crls(f, c, issuer, now, d, r);
+                } else {
+                    // CA certificate: CRL first; no OCSP request at all when a valid CRL is obtained.
+                    crls(f, c, issuer, now, d, r);
+                    if (!r.ok) ocsp(f, c, issuer, now, null, d, r);
                 }
-                for (String u : c.crlDistributionPoints()) {
-                    byte[] der;
-                    try {
-                        der = f.get(u);
-                    } catch (Exception e) {
-                        continue;
-                    }
-                    if (Crl.covers(der, c, issuer, now)) {
-                        add(d.crls, der);
-                        ok = true;
-                    }
-                }
+                // An interrupted caller (DefaultHttp keeps the flag set) ends here, flag kept, instead of reading as
+                // missing revocation data.
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("LTV collection interrupted");
+                boolean ok = r.ok;
+                NotFresh freshErr = r.freshErr;
                 if (!ok) {
                     if (freshErr != null) throw new NotFresh(freshErr.getMessage() + ": " + c.serialRef());
                     throw new Incomplete("no valid OCSP/CRL for " + c.serialRef());
@@ -146,6 +138,48 @@ final class Ltv {
             }
         }
         return d;
+    }
+
+    /** Revocation evidence found for one certificate. */
+    private static final class Found {
+        boolean ok;
+        NotFresh freshErr;
+    }
+
+    /** Go firstOCSP: the certificate's AIA OCSP URLs in order, first valid response; revoked → stop at once. */
+    private static void ocsp(Fetcher f, Cert c, Cert issuer, Date now, Date fresh, DssData d, Found r) throws CertificateRevoked {
+        for (String u : c.ocspServers()) {
+            try {
+                Object[] x = fetchOcsp(f, u, c, issuer, now, fresh);
+                add(d.ocsps, (byte[]) x[0]);
+                Ocsp.Response resp = (Ocsp.Response) x[1];
+                if (resp.certificate != null && !resp.certificate.equals(issuer)) add(d.certs, resp.certificate.raw); // delegated responder
+                r.ok = true;
+                return;
+            } catch (CertificateRevoked e) {
+                throw e;
+            } catch (NotFresh e) {
+                r.freshErr = e;
+            } catch (Exception e) {
+                // next responder
+            }
+        }
+    }
+
+    /** Go validCRLs: every CDP CRL (in order) that covers [c]; listed → [CertificateRevoked]. */
+    private static void crls(Fetcher f, Cert c, Cert issuer, Date now, DssData d, Found r) throws CertificateRevoked {
+        for (String u : c.crlDistributionPoints()) {
+            byte[] der;
+            try {
+                der = f.get(u);
+            } catch (Exception e) {
+                continue;
+            }
+            if (Crl.covers(der, c, issuer, now)) {
+                add(d.crls, der);
+                r.ok = true;
+            }
+        }
     }
 
     private static boolean hasFreshOcsp(List<byte[]> list, Cert c, Cert issuer, Date after) {

@@ -149,7 +149,10 @@ final class PdfLexer {
                         PdfObj key = parseObject(depth + 1);
                         if (!(key instanceof PdfObj.Name)) throw new PdfException("dictionary key is not a name at " + pos);
                         PdfObj value = parseObject(depth + 1);
-                        if (!value.isNull()) d.entries.put(((PdfObj.Name) key).v(), value); // null value = absent key (§7.3.7)
+                        // null value = absent key (§7.3.7); the last duplicate wins (Go map, [Structure]), so a later null
+                        // removes an earlier value — `/Filter /FlateDecode /Filter null` is unfiltered for both.
+                        if (value.isNull()) d.entries.remove(((PdfObj.Name) key).v());
+                        else d.entries.put(((PdfObj.Name) key).v(), value);
                     }
                     return new PdfObj.Dict(d);
                 }

@@ -255,8 +255,8 @@ final class Precheck {
     /** Step 8: structural ByteRange checks + CMS signature over the ByteRange bytes (no chain/revocation/time). */
     private static Checked checkPriorSignature(byte[] doc, SigDict s) {
         List<Long> br = s.byteRange;
-        if (br == null || br.size() != 4 || br.get(0) != 0L || br.get(1) <= 0 || br.get(2) <= br.get(1) + 1 || br.get(3) < 0
-            || br.get(2) + br.get(3) > doc.length) {
+        if (br == null || br.size() != 4 || br.get(0) != 0L || br.get(1) <= 0 || br.get(2) > doc.length || br.get(3) > doc.length
+            || br.get(2) <= br.get(1) + 1 || br.get(3) < 0 || br.get(2) + br.get(3) > doc.length) {
             throw new IllegalArgumentException("ByteRange");
         }
         int a = (int) (long) br.get(1);
