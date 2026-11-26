@@ -50,7 +50,7 @@ import mn.eidmongolia.eid.VerifiedIdentity;
 /**
  * «Sign in with eID» button backend — framework neutral (Go {@code eidlogin.Handler}, TS {@code createEidLogin} /
  * {@code handleRequest}). The browser side is the TS SDK's {@code <eid-login-button>}; the JSON shapes, cookie and status
- * codes are the same as Go / TS (conformance corpus {@code eidlogin/1}).
+ * codes are the same as Go / TS (conformance corpus {@code eidlogin/2}).
  *
  * <pre>
  *   POST {base}/start   {"mode":"qr"} | {"mode":"push","idCode":"УБ12345678"} → {mode, vc, qr?, expiresIn}
