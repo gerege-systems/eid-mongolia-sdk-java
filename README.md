@@ -109,7 +109,7 @@ prepare-д `onBehalfOf` (NTRMN-…) хоосон. `medium` null бол `sessionI
 
 | Код | Утга |
 |---|---|
-| `PDF_INVALID` | PDF задрахгүй; бүтэц хэт гүн (давхарлалт > 256), ObjStm мөчлөг, `/Extends` > 64, `/Size` > 2^21 (PRECHECKS #2a/#2b) |
+| `PDF_INVALID` | PDF задрахгүй; бүтэц хэт гүн (давхарлалт > 256), ObjStm мөчлөг, `/Extends` > 64, `/Size` > 2^21, xref хэсэг > 128, xref stream-ийн `/W` / `/Index` / мөр > 2^21, object stream-ийн ажил > 1 GiB (PRECHECKS #2a/#2b) |
 | `PDF_ENCRYPTED` | Шифрлэгдсэн PDF |
 | `PDF_LOCKED` | DocMDP P=1 — өөрчлөхийг хориглосон |
 | `PDF_TOO_LARGE` | 9.75 MiB (оролт) / 10 MiB (гаралт)-аас их |
@@ -363,8 +363,16 @@ signing-certificate-v2, үндэсний Root CA хүртэлх гинж (fail-c
 бол AIA OCSP / CDP CRL), LTV, `PAdES-BASELINE-B/T/LT`, `certificate_level`. Сонголт: `roots`, `intermediates`,
 `issuers`, `time`, `offline`, `transport` (`EidPadesTransport`). Баримт сүлжээгээр явахгүй — зөвхөн гэрчилгээний serial
 (OCSP). Алдаа: `ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` / `PDF_ENCRYPTED` / `PDF_NO_SIGNATURE` /
-`PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Халдагчийн PDF-д хязгаартай: 10 MiB, 16 гарын үсэг, давхарлалт / объект /
-inflate / xref гинжийн дээд хязгаар.
+`PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Халдагчийн PDF-д хязгаартай (Go / TS-тэй ижил, corpus v14): 10 MiB, 16
+гарын үсэг, давхарлалт ≤ 256; xref хэсэг ≤ 128 (`trailer` толь + `/Type /XRef` толь), xref stream-ийн `/W` бүр 0…8 ба мөрийн
+урт > 0, `/Index` start + count ≤ 2^21, бүх xref stream-ийн мөр ≤ 2^21, xref / object stream-д ганц шүүлтүүр, задалсан
+xref + object stream нийт ≤ 32 MiB, object stream-ийн гишүүн хайлтын ажил (толгойн хос × задалсан урт) нийт ≤ 1 GiB —
+эдгээрээс хэтэрвэл `PDF_INVALID`; CMS / цагийн тэмдгийн токенд ≤ 32 гэрчилгээ, RSA ≤ 8192 бит, e ≤ 2^32−1, гэрчилгээ /
+TSTInfo serial ≤ 160 бит (эс бөгөөс `malformed_signature`); DSS-ийн задалсан нийт ≤ 8 MiB (нэг массив дахь давхар заалтыг
+нэг удаа уншина). **Интеграцид харагдах:** 128-аас олон incremental update эсвэл маш олон object stream гишүүнтэй баримт →
+`PDF_INVALID`; хожмын гарын үсгийн харагдах тамганы `/Name` тэр гарын үсгийн гэрчилгээний нэрээс (GIVENNAME SURNAME,
+эс бөгөөс CN) ялгаатай, эсвэл тэр гарын үсэг бүрэн бүтэн биш бол өмнөх гарын үсгүүд `modified_after_signing`;
+SignerInfo-ийн MD2/MD5/SHA-1 алгоритм → `weak_algorithm`.
 
 ### «eID-ээр нэвтрэх» товчны backend (`mn.eidmongolia.eid.login`)
 

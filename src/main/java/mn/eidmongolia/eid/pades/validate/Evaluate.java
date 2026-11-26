@@ -447,7 +447,7 @@ final class Evaluate {
     }
 
     /** eidcrypto.SubjectDisplayName. */
-    private static String displayName(Cert c) {
+    static String displayName(Cert c) {
         String[] n = GoFmt.subjectNames(c.rawSubject);
         String s = mn.eidmongolia.eid.internal.Text.trimSpace(n[0] + " " + n[1]);
         return !s.isEmpty() ? s : GoFmt.commonName(c.rawSubject);

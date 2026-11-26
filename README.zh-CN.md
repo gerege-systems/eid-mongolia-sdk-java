@@ -109,7 +109,7 @@ prepare 中 `onBehalfOf`（NTRMN-…）为空。若 `medium` 为 null，则由 `
 
 | 代码 | 含义 |
 |---|---|
-| `PDF_INVALID` | PDF 无法解析；结构过深（嵌套 > 256）、ObjStm 循环、`/Extends` > 64、`/Size` > 2^21（PRECHECKS #2a/#2b） |
+| `PDF_INVALID` | PDF 无法解析；结构过深（嵌套 > 256）、ObjStm 循环、`/Extends` > 64、`/Size` > 2^21、xref 节 > 128、xref 流 `/W` / `/Index` / 行数 > 2^21、对象流工作量 > 1 GiB（PRECHECKS #2a/#2b） |
 | `PDF_ENCRYPTED` | 已加密的 PDF |
 | `PDF_LOCKED` | DocMDP P=1——禁止修改 |
 | `PDF_TOO_LARGE` | 超过 9.75 MiB（输入）/ 10 MiB（输出） |
@@ -357,8 +357,14 @@ KU/EKU、RFC 3161 时间戳、签名之后的修订（shadow / 追加的修改 �
 吊销（DSS 中的 OCSP/CRL；`offline(false)` 时还有 AIA OCSP / CDP CRL）、LTV、`PAdES-BASELINE-B/T/LT`、`certificate_level`。
 选项：`roots`、`intermediates`、`issuers`、`time`、`offline`、`transport`（`EidPadesTransport`）。文档不会离开进程——网络上
 只有证书序列号（OCSP）。错误：`ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` / `PDF_ENCRYPTED` /
-`PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`。对恶意 PDF 有上限：10 MiB、16 个签名、嵌套 / 对象 /
-inflate / xref 链限制。
+`PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`。对恶意 PDF 有上限（与 Go / TS 相同，语料库 v14）：
+10 MiB、16 个签名、嵌套 ≤ 256；xref 节 ≤ 128（`trailer` 字典 + `/Type /XRef` 字典），xref 流每个 `/W` 项 0…8 且行宽 > 0，
+`/Index` start + count ≤ 2^21，所有 xref 流的行数合计 ≤ 2^21，xref / 对象流只允许一个过滤器，解压后的 xref + 对象流合计
+≤ 32 MiB，对象流成员查找工作量（头部对数 × 解压长度）合计 ≤ 1 GiB——超出任一项即 `PDF_INVALID`；每个 CMS 或时间戳令牌
+≤ 32 个证书、RSA ≤ 8192 位、e ≤ 2^32−1、证书 / TSTInfo 序列号 ≤ 160 位（否则 `malformed_signature`）；DSS 解码合计
+≤ 8 MiB（同一数组中重复引用的流只读一次）。**集成方可见的变化：** 超过 128 次增量更新或对象流成员极多的文档 →
+`PDF_INVALID`；后续签名的可见印章 `/Name` 与该签名证书的名称（GIVENNAME SURNAME，否则 CN）不同，或该签名完整性校验失败时，
+之前的签名为 `modified_after_signing`；SignerInfo 使用 MD2/MD5/SHA-1 签名算法 → `weak_algorithm`。
 
 ### “使用 eID 登录”按钮后端（`mn.eidmongolia.eid.login`）
 

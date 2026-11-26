@@ -176,8 +176,17 @@ final class VCrypto {
      * decode. Anything else → IllegalArgumentException, so a bad certificate fails only the signature that carries it.
      */
     static Cert cert(byte[] der) {
+        Cert c = certAnySerial(der);
+        if (c.serial.abs().bitLength() > MAX_SERIAL_BITS) throw new IllegalArgumentException("certificate serial longer than 20 octets");
+        return c;
+    }
+
+    /**
+     * {@link #cert} without the serial bound — CMS certificates, whose bounds (count, serial, RSA size) the caller checks
+     * after parsing, as Go extract.go boundedCerts does (a timestamp token's TSTInfo is still read).
+     */
+    static Cert certAnySerial(byte[] der) {
         Cert c = Cert.parse(der);
-        if (c.serial.bitLength() > MAX_SERIAL_BITS) throw new IllegalArgumentException("certificate serial longer than 20 octets");
         try {
             c.extKeyUsage();
             c.ocspServers();

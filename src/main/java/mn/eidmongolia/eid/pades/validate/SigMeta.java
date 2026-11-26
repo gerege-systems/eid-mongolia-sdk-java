@@ -10,11 +10,17 @@ final class SigMeta {
     boolean roleOK;
     /** The signer certificate is an e-Seal certificate (APPEARANCE_SPEC.md §6.1): only the seal stamp is accepted. */
     boolean seal;
+    /**
+     * The signer certificate's display name (eidcrypto.SubjectDisplayName; "" when it does not parse). The stamp's /Name
+     * must equal it, so a later signature cannot add a visible stamp in someone else's name (Go appearance.go sigMeta.name).
+     */
+    String name;
 
-    SigMeta(int revIndex, String role, boolean roleOK, boolean seal) {
+    SigMeta(int revIndex, String role, boolean roleOK, boolean seal, String name) {
         this.revIndex = revIndex;
         this.role = role;
         this.roleOK = roleOK;
         this.seal = seal;
+        this.name = name;
     }
 }

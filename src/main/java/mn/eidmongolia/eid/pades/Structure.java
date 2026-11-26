@@ -15,10 +15,12 @@ import mn.eidmongolia.eid.internal.Text;
 
 /**
  * PRECHECKS #2a / #2b — Go reference `validate.CheckStructure` (nesting.go + objstm.go, incl. the 2026-11-04 ObjStm
- * hardening), run before any PDF parsing: array/dictionary nesting > 256 from every point where a reader may start an
- * object (after the `obj` / `trailer` keywords, at every offset of a /Type /ObjStm header), a read/inflate budget,
- * top-level /Size > 2 097 152, and the object-stream graph. One layer of defence — it does not make untrusted PDF parsing
- * safe on its own.
+ * hardening and the corpus-v14 rules), run before any PDF parsing: array/dictionary nesting > 256 from every point where
+ * a reader may start an object (after the `obj` / `trailer` keywords, at every offset of a /Type /ObjStm header), a
+ * read/inflate budget (32 MiB of inflated object + xref streams), top-level /Size > 2 097 152, > 128 xref sections,
+ * xref-stream /W (0…8, row width > 0) and /Index (≤ 2^21) bounds, ≤ 2^21 xref-stream rows in total, one filter on an
+ * xref stream, the object-stream lookup work budget, and the object-stream graph. One layer of defence — it does not
+ * make untrusted PDF parsing safe on its own.
  */
 final class Structure {
     static final class Failure extends Exception {
@@ -32,6 +34,13 @@ final class Structure {
     private static final int MAX_OBJSTM_BYTES = 32 << 20; // all inflated object streams together (zip bomb)
     static final long MAX_XREF_SIZE = 1L << 21;
     private static final int MAX_OBJSTM_CHAIN = 64;
+    /** Go maxXrefSections: xref sections = dictionaries after `trailer` + top-level /Type /XRef dictionaries. */
+    static final int MAX_XREF_SECTIONS = 128;
+    /**
+     * Go maxObjStmWork: Σ (header pairs read × decompressed length) over all object streams. A reader that re-reads an
+     * object stream's header per member (Go's external reader) does that much work.
+     */
+    static final long MAX_OBJSTM_WORK = 1L << 30;
 
     private Structure() {
     }
@@ -49,10 +58,11 @@ final class Structure {
                 // The keyword stands alone (`endobj`, `objx` are other keywords).
                 if (at > 0 && !isSpace(doc[at - 1]) && !isDelim(doc[at - 1])) continue;
                 if (end < doc.length && !isSpace(doc[end]) && !isDelim(doc[end])) continue;
+                s.fromTrailer = kws.equals("trailer");
                 s.obj(doc, doc.length, end, true);
             }
         }
-        if (s.bigSize) throw new Failure();
+        if (s.bigSize || s.sections > MAX_XREF_SECTIONS || s.xrefEntries > MAX_XREF_SIZE) throw new Failure();
         checkObjStmGraph(doc);
     }
 
@@ -229,6 +239,17 @@ final class Structure {
         boolean indirect;
         long first;
         long nCount;
+        // xref stream (/Type /XRef): the integer /W and /Index values (last duplicate key wins), *Bad when an element is
+        // not an integer (the reader rejects it itself — not decided here); /Size; length = a direct integer /Length (-1 none).
+        List<Long> w = new ArrayList<>();
+        List<Long> index = new ArrayList<>();
+        boolean wBad;
+        boolean indexBad;
+        boolean wSet;
+        boolean indexSet;
+        long size;
+        boolean sizeSet;
+        long length = -1;
     }
 
     private static final Set<String> HEADER_KEYS = Set.of("Type", "Filter", "DecodeParms", "N", "First");
@@ -237,6 +258,12 @@ final class Structure {
         int budget;
         int inflateLeft;
         boolean bigSize;
+        /** The current top-level object follows the `trailer` keyword (set by check). */
+        boolean fromTrailer;
+        /** Go sections / xrefEntries / objStmWork (see the constants). */
+        long sections;
+        long xrefEntries;
+        long objStmWork;
 
         Scan(int budget, int inflateLeft) {
             this.budget = budget;
@@ -259,6 +286,8 @@ final class Structure {
         private void body(Lex l, byte[] b, int end, int start, boolean allowStream) throws Failure {
             List<Frame> stack = new ArrayList<>();
             Info info = new Info();
+            boolean trailer = fromTrailer && allowStream;
+            fromTrailer = false;
             while (true) {
                 if (budget - (l.pos - start) < 0) throw new Failure();
                 Tok tok = l.next();
@@ -267,7 +296,9 @@ final class Structure {
                     if (tok == Tok.DICT_END) {
                         stack.remove(stack.size() - 1);
                         if (stack.isEmpty()) {
-                            if (allowStream && (info.typ.equals("ObjStm") || info.indirect)) objStm(b, end, l, info);
+                            if (trailer) sections++;
+                            if (allowStream && !trailer && info.typ.equals("XRef")) xrefStm(info);
+                            if (allowStream && (info.typ.equals("ObjStm") || info.typ.equals("XRef") || info.indirect)) objStm(b, end, l, info);
                             return;
                         }
                         Frame last = stack.get(stack.size() - 1);
@@ -294,6 +325,21 @@ final class Structure {
                             info.filter = ""; // the last duplicate key wins; array names are counted below
                             info.filters = 0;
                         }
+                        if (stack.size() == 1 && stack.get(0).dict && stack.get(0).key.equals("W")) {
+                            info.w = new ArrayList<>();
+                            info.wSet = true;
+                            info.wBad = tok != Tok.ARR;
+                        }
+                        if (stack.size() == 1 && stack.get(0).dict && stack.get(0).key.equals("Index")) {
+                            info.index = new ArrayList<>();
+                            info.indexSet = true;
+                            info.indexBad = tok != Tok.ARR;
+                        }
+                        if (stack.size() == 2 && stack.get(0).dict) {
+                            // an array / dictionary inside /W or /Index — not an integer
+                            if (stack.get(0).key.equals("W")) info.wBad = true;
+                            else if (stack.get(0).key.equals("Index")) info.indexBad = true;
+                        }
                         stack.add(new Frame(tok == Tok.DICT, tok == Tok.DICT));
                         continue;
                     case ARR_END:
@@ -311,6 +357,16 @@ final class Structure {
                                     if (stack.size() == 1 && stack.get(0).dict && HEADER_KEYS.contains(stack.get(0).key)) info.indirect = true;
                                     // /Filter [6 0 R] — the reader resolves it and decodes (fail closed).
                                     if (stack.size() == 2 && stack.get(0).dict && stack.get(0).key.equals("Filter")) info.indirect = true;
+                                    // a /W or /Index reference (the array or an element) — the reader does not resolve it
+                                    if ((stack.size() == 1 || stack.size() == 2) && stack.get(0).dict) {
+                                        if (stack.get(0).key.equals("W")) {
+                                            info.wSet = true;
+                                            info.wBad = true;
+                                        } else if (stack.get(0).key.equals("Index")) {
+                                            info.indexSet = true;
+                                            info.indexBad = true;
+                                        }
+                                    }
                                     done = true; // a reference = one value
                                 } else if (t3 == Tok.WORD && l.v.equals("obj")) {
                                     continue; // doubled `N G obj` — the next value continues this object
@@ -358,11 +414,29 @@ final class Structure {
                     case "N":
                         info.nCount = parseInt64(v);
                         break;
-                    case "Size":
-                        if (tok == Tok.WORD && isInt(v) && Long.parseLong(v) > MAX_XREF_SIZE) bigSize = true;
+                    case "Size": {
+                        boolean ok = tok == Tok.WORD && isInt(v);
+                        if (ok && parseInt64(v) > MAX_XREF_SIZE) bigSize = true;
+                        info.size = parseInt64(v);
+                        info.sizeSet = ok;
                         break;
+                    }
                     case "First":
                         info.first = parseInt64(v);
+                        break;
+                    case "Length":
+                        info.length = -1;
+                        if (tok == Tok.WORD && isInt(v) && parseInt64(v) >= 0) info.length = parseInt64(v);
+                        break;
+                    case "W":
+                        info.w = new ArrayList<>();
+                        info.wSet = true;
+                        info.wBad = true;
+                        break;
+                    case "Index":
+                        info.index = new ArrayList<>();
+                        info.indexSet = true;
+                        info.indexBad = true;
                         break;
                     default:
                         break;
@@ -370,20 +444,85 @@ final class Structure {
             } else if (stack.size() == 2 && stack.get(0).dict && stack.get(0).key.equals("Filter") && !stack.get(1).dict && tok == Tok.NAME) {
                 info.filter = v;
                 info.filters++;
+            } else if (stack.size() == 2 && stack.get(0).dict && !stack.get(1).dict && (stack.get(0).key.equals("W") || stack.get(0).key.equals("Index"))) {
+                boolean ok = tok == Tok.WORD && isInt(v);
+                long n = ok ? parseInt64(v) : 0;
+                if (stack.get(0).key.equals("W")) {
+                    info.w.add(n);
+                    info.wBad |= !ok;
+                } else {
+                    info.index.add(n);
+                    info.indexBad |= !ok;
+                }
             }
+        }
+
+        /**
+         * Go xrefStm: one xref section; each /W entry 0…8 with a row width > 0; each /Index pair start, count ≥ 0 and
+         * start + count ≤ 2^21; the rows of all xref streams (/Index counts, else /Size) ≤ 2^21. A non-integer / short /W
+         * or /Index is left to the reader.
+         */
+        private void xrefStm(Info info) throws Failure {
+            sections++;
+            if (info.wSet && !info.wBad && info.w.size() >= 3) {
+                long row = 0;
+                for (long w : info.w) {
+                    if (w < 0 || w > 8) throw new Failure();
+                    row += w;
+                }
+                if (row == 0) throw new Failure();
+            }
+            if (info.indexSet && !info.indexBad && info.index.size() % 2 == 0) {
+                for (int i = 0; i < info.index.size(); i += 2) {
+                    long start = info.index.get(i);
+                    long n = info.index.get(i + 1);
+                    if (start < 0 || n < 0 || start > MAX_XREF_SIZE || n > MAX_XREF_SIZE - start) throw new Failure();
+                    xrefEntries += n;
+                }
+            } else if (!info.indexSet && info.sizeSet && info.size >= 0) {
+                xrefEntries += Math.min(info.size, MAX_XREF_SIZE + 1);
+            }
+            if (xrefEntries > MAX_XREF_SIZE) throw new Failure();
+        }
+
+        /**
+         * Go xrefData: an xref stream with more than one filter → failure; a FlateDecode one is inflated (size only, the
+         * predictor is not applied) and charged to the inflate budget shared with object streams.
+         */
+        private void xrefData(byte[] b, int p, int end, Info info) throws Failure {
+            if (info.filters == 0) return;
+            if (info.filters > 1) throw new Failure();
+            if (!info.filter.equals("FlateDecode")) return;
+            byte[] data = inflatePrefix(b, p, end, inflateLeft);
+            if (data == null) throw new Failure();
+            inflateLeft -= data.length;
+        }
+
+        /** Go chargeObjStm: one object stream's member lookup work (pairs × data length) against MAX_OBJSTM_WORK. */
+        private void chargeObjStm(long pairs, long n) throws Failure {
+            if (pairs > 0 && n > 0 && pairs > (MAX_OBJSTM_WORK - objStmWork) / n) throw new Failure();
+            objStmWork += pairs * n;
         }
 
         /** The data after `stream` (FlateDecode ends on its own, whatever /Length says), objects at every header offset. */
         private void objStm(byte[] b, int end, Lex l, Info info) throws Failure {
             if (l.next() != Tok.WORD || !l.v.equals("stream")) return;
             if (info.indirect) throw new Failure(); // /Type /Filter /N /First by reference — never in a legitimate file
-            if (!info.typ.equals("ObjStm")) return;
+            if (!info.typ.equals("ObjStm") && !info.typ.equals("XRef")) return;
             int p = l.pos;
             if (p < end && b[p] == '\r') p++;
             if (p < end && b[p] == '\n') p++;
             p = Math.min(p, end);
+            if (info.typ.equals("XRef")) {
+                xrefData(b, p, end, info);
+                return;
+            }
             if (info.filters == 0) {
-                objStmData(b, p, end, info); // unfiltered — the rest of the data
+                // unfiltered — the data is the rest of the file; the work charge uses a direct /Length when present
+                long pairs = objStmData(b, p, end, info);
+                long n = end - p;
+                if (info.length >= 0) n = Math.min(n, info.length);
+                chargeObjStm(pairs, n);
                 return;
             }
             if (info.filters > 1) throw new Failure(); // chained filters are not replayed — fail closed
@@ -393,19 +532,23 @@ final class Structure {
             if (data == null) throw new Failure();
             inflateLeft -= data.length;
             budget -= data.length;
-            objStmData(data, 0, data.length, info);
+            long pairs = objStmData(data, 0, data.length, info);
+            chargeObjStm(pairs, data.length);
         }
 
         /**
          * Go objStmData (2026-11-04): the offset is computed as the reader does — a non-integer token is 0, a negative
-         * offset / /First is kept (int64 wrap); a position before the data → failure; beyond its end → skipped.
+         * offset / /First is kept (int64 wrap); a position before the data → failure; beyond its end → skipped. Returns
+         * the pairs read (iterations whose first token is not EOF) for the work charge.
          */
-        private void objStmData(byte[] b, int base, int end, Info info) throws Failure {
+        private long objStmData(byte[] b, int base, int end, Info info) throws Failure {
             Lex l = new Lex(b, end, base);
             boolean firstDone = false;
             long len = end - base;
+            long pairs = 0;
             for (long i = 0; i < info.nCount; i++) {
                 if (l.next() == Tok.EOF) break;
+                pairs++;
                 long off = 0;
                 if (l.next() == Tok.WORD) {
                     Long v = PdfLexer.toLong(l.v);
@@ -419,6 +562,7 @@ final class Structure {
                 obj(b, end, base + (int) at, false);
             }
             if (budget < 0) throw new Failure();
+            return pairs;
         }
     }
 
