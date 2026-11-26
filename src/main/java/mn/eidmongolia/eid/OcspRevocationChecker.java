@@ -115,6 +115,13 @@ public final class OcspRevocationChecker implements RevocationChecker {
             emit(new OcspObservation(RevocationStatus.UNKNOWN, "", Duration.ZERO, false, e));
             throw e;
         }
+        // Cross-SDK hardening (stricter than Go / TS): the given issuer must have signed the leaf — checked before the cache
+        // and before any network call, so a wrong issuer never yields a GOOD bound to somebody else's CertID.
+        if (!leaf.issuedBy(iss)) {
+            EidException.Ocsp e = new EidException.Ocsp(EidException.Ocsp.Kind.NO_ISSUER, "", 0, "гэрчилгээг өгсөн issuer гаргаагүй", null);
+            emit(new OcspObservation(RevocationStatus.UNKNOWN, "", Duration.ZERO, false, e));
+            throw e;
+        }
         String key = Text.hex(EidCrypto.digest("SHA-256", iss.raw)).substring(0, 16) + ":" + leaf.serial.toString(16);
         Instant hit;
         synchronized (cache) {
@@ -305,7 +312,7 @@ public final class OcspRevocationChecker implements RevocationChecker {
         private Clock clock;
         private Duration cacheTtl;
         private Consumer<OcspObservation> observer;
-        private boolean bindCertId;
+        private boolean bindCertId = true;
 
         private Builder() {
         }
@@ -344,8 +351,9 @@ public final class OcspRevocationChecker implements RevocationChecker {
         }
 
         /**
-         * true also requires every SingleResponse for the serial to carry the issuer's CertID issuerNameHash /
-         * issuerKeyHash (the PAdES LTV / «My QR» binding). Off by default — the Go / TS checkers compare the serial only.
+         * true (the default) also requires every SingleResponse for the serial to carry the issuer's CertID issuerNameHash /
+         * issuerKeyHash (the PAdES LTV / «My QR» binding) — stricter than the Go / TS checkers, which compare the serial
+         * only; false restores their rule.
          */
         public Builder bindCertId(boolean v) {
             bindCertId = v;

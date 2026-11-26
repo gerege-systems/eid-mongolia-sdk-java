@@ -165,6 +165,50 @@ public class ContractTest {
         assertTrue(absent.toString(), absent.isEmpty());
     }
 
+    /**
+     * Go TestContractShare, TS contract.test.ts «Share»: endpoints.share's multipart members ({file, filename?, to (1–5),
+     * …}) equal {@link ShareService#FORM_FIELDS} (the CA rejects unknown members with 400) and the share block parses.
+     */
+    @Test
+    public void shareFieldsAndBlock() {
+        String rpBase = discovery.optString("rp_api_base");
+        Object d = discovery.optObj("endpoints").get("share");
+        String desc = d instanceof String ? (String) d : "";
+        assertTrue("endpoints.share: " + desc, desc.startsWith("POST " + rpBase + Routes.SHARE.path() + " "));
+        int i = desc.indexOf('{');
+        int j = desc.indexOf('}');
+        assertTrue("endpoints.share-д талбар алга: " + desc, i >= 0 && j > i);
+        TreeSet<String> want = new TreeSet<>();
+        for (String f : desc.substring(i + 1, j).split(",")) {
+            f = f.strip();
+            int k = f.indexOf(' ');
+            if (k >= 0) f = f.substring(0, k);
+            if (f.endsWith("?")) f = f.substring(0, f.length() - 1);
+            want.add(f);
+        }
+        assertEquals("POST /share талбар", want, new TreeSet<>(ShareService.FORM_FIELDS));
+        Json.Obj s = discovery.optObj("share");
+        assertNotNull("discovery-д share блок алга", s);
+        Json.Obj q = s.optObj("quota");
+        assertTrue("share блок: " + Dto.text(s), (rpBase + Routes.SHARE.path()).equals(s.optString("endpoint")) && s.optLong("maxFileBytes", 0) > 0
+            && s.optLong("maxRecipients", 0) > 0 && s.optArr("formats") != null && !s.optArr("formats").isEmpty() && q != null
+            && q.optLong("perRPHour", 0) > 0 && q.optLong("perRPDay", 0) > 0 && q.optLong("perRecipientDay", 0) > 0);
+    }
+
+    /**
+     * Go TestContractTokenCertificate, TS «TokenCertificate»: the tokenCertificate block's issue / result equal the
+     * routes; scopeLockedOnRenewal, appTransaction "optional", personalAutoSupersede, dryRun.
+     */
+    @Test
+    public void tokenCertificateBlock() {
+        String rpBase = discovery.optString("rp_api_base");
+        Json.Obj t = discovery.optObj("tokenCertificate");
+        assertNotNull("discovery-д tokenCertificate блок алга", t);
+        assertTrue("tokenCertificate блок: " + Dto.text(t), (rpBase + Routes.TOKEN_CERTIFICATE.path()).equals(t.optString("issue"))
+            && (rpBase + Routes.TOKEN_CERTIFICATE_RESULT.path()).equals(t.optString("result")) && t.optBool("scopeLockedOnRenewal", false)
+            && "optional".equals(t.optString("appTransaction")) && t.optBool("personalAutoSupersede", false) && t.optBool("dryRun", false));
+    }
+
     @Test
     public void sessionTtlPublished() {
         Json.Obj t = discovery.optObj("sessionTtl");

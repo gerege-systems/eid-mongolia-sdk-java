@@ -29,6 +29,7 @@ public final class Cert {
     public static final String OID_EKU = "2.5.29.37";
     public static final String OID_ANY_EKU = "2.5.29.37.0";
     public static final String OID_SERIAL_NUMBER = "2.5.4.5";
+    public static final String OID_COMMON_NAME = "2.5.4.3";
     public static final String OID_BASIC_CONSTRAINTS = "2.5.29.19";
     public static final String OID_SKI = "2.5.29.14";
     public static final String OID_AKI = "2.5.29.35";
@@ -444,6 +445,13 @@ public final class Cert {
     /** Subject attribute (last occurrence wins, like Go pkix.Name). */
     public String subjectAttr(String oid) {
         return lastAttr(subjectAttrs, oid);
+    }
+
+    /** How many times the subject carries the attribute (every RDN, multi-valued ones too). */
+    public int subjectAttrCount(String oid) {
+        int n = 0;
+        for (String[] a : subjectAttrs) if (a[0].equals(oid)) n++;
+        return n;
     }
 
     /** Subject attribute, first occurrence (Go pkix.Name Country[0], Names scan), or null. */

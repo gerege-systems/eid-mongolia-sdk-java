@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
  *
  * <p>Services: {@link #auth()}, {@link #sign()} (incl. certificate choice), {@link #session()}, {@link #pdf()},
  * {@link #validator()} (trust: {@link Builder#trust}; revocation: {@link OcspRevocationChecker}); crypto helpers
- * {@link Acsp}, {@link DeviceLink}, {@link EidCrypto}. In progress: the remaining services follow.
+ * {@link Acsp}, {@link DeviceLink}, {@link EidCrypto}. {@link #organization()}, {@link #person()}, {@link #seal()}, {@link #token()}, {@link #qr()}, {@link #share}.
  */
 public final class EidClient {
     /** The official RP-API host (all RPs since 2026-09-28, no /v3); mTLS RPs too. */
@@ -57,6 +57,12 @@ public final class EidClient {
     private final SessionService session;
     private final PdfService pdf;
     private final ResponseValidator validator;
+    private final OrganizationService organization;
+    private final PersonService person;
+    private final SealService seal;
+    private final TokenService token;
+    private final QrService qr;
+    private final ShareService share;
 
     private EidClient(Builder b) {
         if (b.credentials.apiSecret().isEmpty()) throw new IllegalArgumentException("eid: Credentials.apiSecret шаардлагатай");
@@ -74,6 +80,13 @@ public final class EidClient {
         this.session = new SessionService(http, clock);
         this.pdf = new PdfService(http, pdfTimeout);
         this.validator = new ResponseValidator(b.trust, clock);
+        DeviceLink.Sleeper sleeper = b.sleeper != null ? b.sleeper : d -> Thread.sleep(d.toMillis(), d.toNanosPart() % 1_000_000);
+        this.organization = new OrganizationService(http);
+        this.person = new PersonService(http);
+        this.seal = new SealService(http, clock, sleeper);
+        this.token = new TokenService(http, credentials, validator);
+        this.qr = new QrService(http, credentials, session, clock, b.qrIssuer, b.qrTrust);
+        this.share = new ShareService(http);
     }
 
     private static Duration positiveOr(Duration d, Duration def) {
@@ -110,6 +123,47 @@ public final class EidClient {
      */
     public ResponseValidator validator() {
         return validator;
+    }
+
+    /** Organisations a citizen may represent, and their RP seal grants. */
+    public OrganizationService organization() {
+        return organization;
+    }
+
+    /** The citizen's PKI dashboard (PKI_READ): certificates, devices, activity, summary, children. */
+    public PersonService person() {
+        return person;
+    }
+
+    /** Organisation e-Seal: certificate, certificate requests, seal grants, sealing a digest (and {@code EidPades.sealPdf}). */
+    public SealService seal() {
+        return seal;
+    }
+
+    /** USB token certificate issuance and token sign-in. */
+    public TokenService token() {
+        return token;
+    }
+
+    /** «My QR»: start / result / check, verified by {@link mn.eidmongolia.eid.pades.EidQr}. */
+    public QrService qr() {
+        return qr;
+    }
+
+    /**
+     * POST /share (SIGN permission; Go {@code Client.Share}): e-mails a signed file (PDF with a valid eID signature) to 1–5
+     * recipients as an attachment; the CA does not keep it. 150 s timeout.
+     *
+     * @throws EidException.Share {@link EidErrorCodes#SHARE} codes (422 reason, 502 sent / failed / recipients)
+     * @throws EidException.Authentication 401, {@link EidException.Forbidden} 403, {@link EidException.Network}
+     */
+    public ShareResult share(ShareRequest request) {
+        return share.share(request);
+    }
+
+    /** Discovery's share block (Go {@code ShareInfo}); absent on an older CA → enabled false. */
+    public ShareInfo shareInfo() {
+        return share.info();
     }
 
     /** Credentials.rpName — the RP name shown on the citizen's phone. */
@@ -243,6 +297,9 @@ public final class EidClient {
         private EidTransport transport;
         private Clock clock;
         private TrustConfig trust;
+        private DeviceLink.Sleeper sleeper;
+        private String qrIssuer;
+        private mn.eidmongolia.eid.pades.EidQr.Trust qrTrust;
 
         private Builder(Credentials credentials) {
             this.credentials = Objects.requireNonNull(credentials, "credentials");
@@ -303,6 +360,27 @@ public final class EidClient {
         /** The clock for receivedAt, computed expiry and waitForResult deadlines (tests). null = the system clock. */
         Builder clock(Clock v) {
             clock = v;
+            return this;
+        }
+
+        /** The seal waits' sleep (tests). null = Thread.sleep. */
+        Builder sleeper(DeviceLink.Sleeper v) {
+            sleeper = v;
+            return this;
+        }
+
+        /** The expected «My QR» JWS iss ({@link EidClient#qr()}); null / "" = {@link mn.eidmongolia.eid.pades.EidQr#DEFAULT_ISSUER} (test environments only). */
+        public Builder qrIssuer(String v) {
+            qrIssuer = v;
+            return this;
+        }
+
+        /**
+         * «My QR» trust ({@link EidClient#qr()}); null = {@link mn.eidmongolia.eid.pades.EidQr.Trust#DEFAULT} (embedded national root,
+         * issuer 04, OCSP hard-fail). Separate from {@link #trust} (the Go SDK derives the QR trust from its TrustConfig).
+         */
+        public Builder qrTrust(mn.eidmongolia.eid.pades.EidQr.Trust v) {
+            qrTrust = v;
             return this;
         }
 

@@ -178,7 +178,11 @@ public final class EidQr {
             throw err(EidQrException.HEADER_INVALID, "x5c is not a certificate");
         }
 
-        // 4. Chain + leaf profile.
+        // 4. Chain + leaf profile. Cross-SDK hardening first (stricter than Go / TS): one SERIALNUMBER and one CN at most —
+        // the identity must not depend on which duplicate a parser picks.
+        if (leaf.subjectAttrCount(Cert.OID_SERIAL_NUMBER) > 1 || leaf.subjectAttrCount(Cert.OID_COMMON_NAME) > 1) {
+            throw err(EidQrException.CHAIN_INVALID, "subject has more than one SERIALNUMBER or CN (" + leaf.serialRef() + ")");
+        }
         Cert issuer = checkChain(leaf, inter, t, now);
 
         // 5. Revocation.

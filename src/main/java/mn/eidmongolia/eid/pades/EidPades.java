@@ -87,6 +87,58 @@ public final class EidPades {
         }
     }
 
+    /**
+     * Seals a PDF with the organisation's e-Seal (Go {@code pades.SealPDF}): the seal certificate
+     * ({@code GET /seal/certificate/{orgEtsi}}) → {@link #prepare} → the DTBS sealed via {@code POST /seal/{orgEtsi}}
+     * (SHA-256) → {@link #complete} (TSA + OCSP/CRL + DSS + self-validation) → PAdES-BASELINE-LT. The PDF never reaches
+     * the CA — only the 32-byte DTBS. Validators (CA, SDKs) classify the signature as usage "seal".
+     *
+     * <p>Invisible only in this release ({@link SealOptions}): {@code options.invisible()} false → REQUEST_INVALID
+     * before any network call.
+     *
+     * @throws EidPadesException SIGNER_INVALID — the certificate is not an e-Seal one, or the organisation's seal
+     *     certificate changed between the two calls; the {@link #prepare} / {@link #complete} codes
+     * @throws mn.eidmongolia.eid.EidException the {@link Sealer}'s errors unchanged (403 — no SEAL right; 429 — retryable;
+     *     409 seal codes; 503 SEAL_SERVICE_DISABLED — never retried, no unsealed file is returned)
+     */
+    public static Completed sealPdf(Sealer sealer, String orgEtsi, byte[] pdf, SealOptions options) {
+        return sealPdf(sealer, orgEtsi, pdf, options, Pades.Env.system());
+    }
+
+    static Completed sealPdf(Sealer sealer, String orgEtsi, byte[] pdf, SealOptions options, Pades.Env env) {
+        Objects.requireNonNull(pdf, "pdf");
+        if (sealer == null) throw new EidPadesException.RequestInvalid("Sealer null");
+        SealOptions o = options == null ? SealOptions.builder().build() : options;
+        if (!o.invisible()) {
+            throw new EidPadesException.RequestInvalid("the visible seal stamp is not supported yet (golden v12/v13) — set SealOptions.invisible(true)");
+        }
+        mn.eidmongolia.eid.SealCertificate sc = sealer.certificate(orgEtsi);
+        byte[] der = sc == null ? new byte[0] : sc.certificate();
+        mn.eidmongolia.eid.internal.Cert cert;
+        try {
+            cert = mn.eidmongolia.eid.internal.Cert.parse(der);
+        } catch (IllegalArgumentException e) {
+            throw new EidPadesException.SignerInvalid("seal certificate does not parse");
+        }
+        if (!mn.eidmongolia.eid.SealService.isSealCertificate(cert.raw)) {
+            throw new EidPadesException.SignerInvalid("not an e-Seal certificate (KeyUsage must be nonRepudiation only)");
+        }
+        PrepareOptions.Builder pb = PrepareOptions.builder(cert.raw).chain(o.chain()).signerName(o.signerName()).reason(o.reason())
+            .signingTime(o.signingTime());
+        Prepared p = prepare(pdf, pb.build());
+        mn.eidmongolia.eid.SealResult r = sealer.seal(orgEtsi, p.dtbs(), mn.eidmongolia.eid.HashAlgorithm.SHA_256);
+        if (r == null || !java.util.Arrays.equals(r.certificate(), cert.raw)) {
+            throw new EidPadesException.SignerInvalid("the organisation's seal certificate changed while sealing — try again");
+        }
+        try {
+            return Pades.complete(p.state(), r.signature(), o.complete(), env);
+        } catch (EidPadesException e) {
+            throw e;
+        } catch (Exception e) {
+            throw internal(e);
+        }
+    }
+
     private static EidPadesException internal(Exception e) {
         EidPadesException x = new EidPadesException.Internal(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
         x.initCause(e);
