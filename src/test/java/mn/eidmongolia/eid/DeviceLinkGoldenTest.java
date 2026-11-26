@@ -77,7 +77,7 @@ public class DeviceLinkGoldenTest {
     }
 
     @Test
-    public void golden() {
+    public void goldenVectors() {
         Json.Obj g = golden();
         List<Object> vectors = g.optArr("vectors");
         assertEquals(15, vectors.size());
