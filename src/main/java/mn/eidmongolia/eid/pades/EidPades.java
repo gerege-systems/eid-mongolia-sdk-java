@@ -139,6 +139,22 @@ public final class EidPades {
         }
     }
 
+    /**
+     * Validates every PAdES/CMS signature of a signed or sealed PDF locally (Go {@code pades.ValidatePDF}, TS
+     * {@code validatePdf}; the same rules and JSON report as the CA's {@code /v3/validate/pdf}): ByteRange / messageDigest
+     * integrity, the CMS signature, the chain to the national root, key usage, validity, RFC 3161 timestamp, revisions
+     * after the signature (modified_after_signing; visible stamps per APPEARANCE_SPEC §5), revocation (DSS, and online
+     * OCSP/CRL unless {@code offline}), LTV and the certificate level. Blocking network I/O unless offline.
+     *
+     * @throws mn.eidmongolia.eid.pades.validate.ValidatePdfException PDF_TOO_LARGE, PDF_INVALID, PDF_ENCRYPTED,
+     *     PDF_NO_SIGNATURE, PDF_TOO_MANY_SIGNATURES, REQUEST_INVALID
+     */
+    public static mn.eidmongolia.eid.pades.validate.PdfReport validatePdf(byte[] pdf, mn.eidmongolia.eid.pades.validate.ValidatePdfOptions options) {
+        Objects.requireNonNull(pdf, "pdf");
+        return mn.eidmongolia.eid.pades.validate.Engine.run(pdf,
+            options == null ? mn.eidmongolia.eid.pades.validate.ValidatePdfOptions.DEFAULT : options, ValidateSupport.INSTANCE, DefaultHttp.INSTANCE);
+    }
+
     private static EidPadesException internal(Exception e) {
         EidPadesException x = new EidPadesException.Internal(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
         x.initCause(e);
