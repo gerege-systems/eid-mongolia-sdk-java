@@ -2,6 +2,168 @@
 
 Бүх өөрчлөлт `changelog.d/`-ээр орж, release бүрд энд нэгтгэгдэнэ.
 
+## 0.3.0 — 2026-11-27
+
+Same artifact and coordinates (`com.github.gerege-systems:eid-mongolia-sdk-java`, `Automatic-Module-Name`
+`mn.eidmongolia.eid.pades`). New: `EidPades.validatePdf` — local validation of a signed PDF with the same report as
+Go / TS and the CA `/v3/validate/pdf` (corpus v14, 80/80); seal registration (`seal().registerSealedPdf`,
+`sealForDocument`, `SealOptions.qr / docId / fileName`); PAdES golden v13 — the organisation seal stamp, visible by
+default in `sealPdf`; rp-conformance corpus v2 hardening (login cookie `__Host-eid_login`, hashed push rate-limit keys,
+validator / OCSP weak-key rules, `RateRule.maxKeys`). The public API only gained members (source and binary compatible
+with 0.2.0; see the `RateRule` note below). Read **Upgrade notes** before upgrading — several defaults changed.
+
+### Security
+
+- **Login cookie** (`mn.eidmongolia.eid.login`): the default name is now `__Host-eid_login` (Secure, no Domain, Path
+  `/`), so a sibling host or another path can no longer set or shadow it; a request carrying the login cookie more than
+  once is treated as having none (status `EXPIRED`, callback `eid_error=expired`).
+- **No ID numbers in rate-limit keys:** the per-ID push limit is keyed `push:<hmac>` (the audit HMAC of the number, 32
+  hex) instead of `push:<id>`, so custom `rateLimit` hooks, `RateRule.func` and external limiters (e.g. Redis) never
+  store citizen ID numbers. `RateRule.maxKeys` bounds the in-memory limiter table.
+- **Weak keys:** the validator reports `cert.weak_key` (RSA < 2048 bits, even or < 3 exponent) right after
+  `cert.malformed`; the OCSP checker refuses a weak-key issuer (`no_issuer`, before cache / network) and a weak
+  delegated responder (`signature`); a weak RSA key in the trust pool is a configuration error.
+- **Hostile PDFs:** structural limits (Go `CheckStructure` / TS `checkStructure`) on xref sections, xref stream
+  `/W` / `/Index`, entry counts, decompression and object-stream lookup work, applied by `prepare`, `complete`,
+  `suggestPlacement`, `sealPdf` and `validatePdf`; the validator bounds CMS / timestamp certificates (≤ 32, serial
+  ≤ 160 bits, RSA ≤ 8192 bits, e ≤ 2^32−1) and treats MD2 / MD5 / OIW SHA-1 SignerInfo algorithms as weak.
+- **Later-signature rule:** only an intact later signature counts as an extension of an earlier one, and its visible
+  stamp's `/Name` must equal its certificate's display name — otherwise the earlier signatures are
+  `modified_after_signing`.
+
+### Upgrade notes (from 0.2.0)
+
+- `sealPdf` without options now draws a **visible** seal stamp (bottom-right, ≤ 220 × 64 pt; invisible when it does not
+  fit). In 0.2.0 anything but `invisible(true)` was `REQUEST_INVALID`. `SealOptions.invisible(true)` keeps output
+  byte-identical to 0.2.0 — use it while validators released before the seal stamp (older CA / TS SDK) are still in use,
+  as they report earlier signatures as modified.
+- `prepare` with an e-Seal certificate (KeyUsage nonRepudiation only, no EKU) and an appearance now draws the seal
+  stamp instead of the personal signature stamp.
+- On signed documents the docId is also read from an organisation seal stamp with QR (`/EIDVerify` marker), after the
+  verify page; a `PrepareOptions.docId` that differs from the found one is `REQUEST_INVALID` (also for invisible
+  signatures).
+- The login cookie name change (`eid_login` → `__Host-eid_login` under the default Secure / no Domain / Path `/`
+  settings; unchanged with `insecureCookie`, `cookieDomain`, another `cookiePath` or an explicit `cookieName`) restarts
+  logins that are in progress during the upgrade once.
+- Custom rate-limit hooks receive `push:<hmac>` instead of `push:<id>`. Instances that share one limiter must be
+  configured with the same `auditKey`, otherwise each instance derives different keys.
+- `EidLogin.RateRule` gained a fourth record component (`maxKeys`). The 0.2.0 three-argument constructor and accessors
+  remain, so the change is source and binary compatible — but Java 21 record deconstruction patterns over `RateRule`
+  (`case RateRule(var max, var window, var func)`) no longer compile and need the fourth component.
+- Documents with more than 128 xref sections (incremental updates) or very large object streams are refused at
+  `prepare` / `sealPdf` (`PDF_INVALID`) and reported `PDF_INVALID` by the validator (was `PDF_NO_SIGNATURE` or slow
+  parsing); xref stream `/W` / `/Index` out of range likewise.
+- A later visible stamp whose `/Name` differs from the certificate display name (GIVENNAME SURNAME, else CN) makes the
+  earlier signatures `modified_after_signing` (was `valid` + `extended_by_signatures_only`).
+- A certificate with a weak (< 2048-bit) RSA key in the trust pool (anchors / intermediates) is now a configuration
+  error: building the `ResponseValidator` throws `IllegalArgumentException` (was `chain.untrusted` at validation).
+
+### Release preparation
+
+- Version 0.3.0 (`build.gradle.kts` default; the tag still sets it for JitPack and the release workflow); README
+  (mn / en / zh) install snippets (Gradle, Maven) and the support-matrix heading. The release workflow and
+  `jitpack.yml` need no change. The SDK sends no versioned User-Agent, so there is no version constant in code.
+
+### PAdES golden v11 → v13: байгууллагын тамганы дардас, QR-тэй тамга, docId дүрэм; `sealPdf` харагдах
+
+- Юу:
+  - Go reference (`eid-mongolia-sdk-go` `499aa5c`, golden v12 + v13 + §6.6 засварууд) байт-ижил порт: e-Seal гэрчилгээтэй
+    харагдах гарын үсэг нь QR-гүй тамганы дардас (APPEARANCE_SPEC §6.2: тамганы label, үүргийн мөргүй, бүтэн өргөнтэй
+    бичвэр); QR-тэй тамганы дардас (§6.5) — Go-той адил нийтийн бус (`PrepareOptions` дотоод `sealQr`, зөвхөн golden).
+  - `prepare`-ийн docId дүрэм (§6.6, PRECHECKS): гарын үсэгтэй баримтад verify хуудас → шалгасан e-Seal гарын үсгийн хамгийн
+    эрт зурсан `/EIDVerify` тэмдэгтэй дардас (шууд бус `/V`, ганц widget, маркерын rev = байрлал, `/Filter` алга/шууд null)
+    → `PrepareOptions.docId`; олдсонтой зөрвөл `REQUEST_INVALID` (үл харагдах гарын үсэгт ч); санамсаргүй docId үүсгэхгүй.
+  - `EidPades.sealPdf` (Go `SealPDF`): анхдагч нь харагдах тамганы дардас (автомат ≤ 220 × 64 pt баруун доод буланд,
+    багтахгүй / `PDF_TOO_LARGE` бол үл харагдах), шинэ `SealOptions.appearance`, `Completed.placement()`,
+    `EidPades.SEAL_STAMP_WIDTH/HEIGHT/MARGIN`. `invisible(true)` гаралт 0.2.0-тэй байт-ижил.
+  - `wrapLimit` maxLines-аас цааш мөр үүсгэхгүй (Go `vpage.go`; гаралт ижил, урт бичвэрт квадрат хугацаагүй).
+  - `scripts/sync-pades-golden.sh` нь commit SHA-аар pin хийнэ (Go репод v12/v13 tag алга); `golden/SOURCE` = `499aa5c…`.
+- Зан төлөвийн өөрчлөлт: `sealPdf`-ийн анхдагч `REQUEST_INVALID` → харагдах дардас; гарын үсэгтэй баримтын docId нь
+  тамганы QR-тэй дардсаас ч уншигдана. Нийтийн API зөвхөн нэмэгдсэн (0.2.0-тэй source/binary нийцтэй).
+- Яагаад: Java PAdES хөдөлгүүрийг Go / .NET-тэй ижил golden-д хүргэж, «зөвхөн үл харагдах» хязгаарыг авах.
+- Шалгасан: `./gradlew build` macmini (JDK 17) дээр — 198 тест ногоон (golden 54 тохиолдол — 50 complete хүртэл, шинэ `SealStampTest` 12:
+  Go-ийн TestSealQRContent, TestResolveDocID, TestDocIDFromStamps*, TestPrepareDocIDRule, TestSealPDF* портууд, `sealPdf`
+  анхдагчийн гаралт = golden `seal-visible` байт-ижил); CI 17/21 Linux/Windows.
+
+### rp-conformance/2 (cross-SDK hardening) ба тамганы бүртгэл (`POST /seal/{orgEtsi}/registrations`)
+
+- Юу:
+  - Conformance corpus v2: `src/test/resources/conformance` = `eid-mongolia-sdk-go` `a537226` (corpus нь `704e7b1`-тэй
+    байт-ижил; `scripts/sync-conformance.sh`-ийн `--check`-ээр CI тулгана). rp-validate 88/88, OCSP 24/24, wire 26/26,
+    eidlogin 34/34 (harness шинэ `wireCookieName`, `cookieDomain`, `cookiePath`, `clientIp`, `auditKeyHex`, `rateLimits`,
+    `cookieHeader`, `absentAttributes`-ийг хэрэгжүүлж, үл мэдэх corpus түлхүүр дээр унана).
+  - Validator: `cert.weak_key` (`ValidationReasons.CERT_WEAK_KEY` — RSA < 2048 бит, эсвэл exponent тэгш / < 3) ба
+    `subject.duplicate_identity` нь `cert.malformed`-ийн дараа шууд (auth, sign, certificate choice, токен нэвтрэлт,
+    My QR-д `QR_CHAIN_INVALID`); issuer allowlist нь олдсон issuer-ийн SKI-г, SKI алга бол RFC 5280 арга 1-ийн key id-г
+    (leaf-ийн AKI зөвхөн issuer олдоогүй үед); trust pool-д сул RSA түлхүүр → тохиргооны алдаа (`IllegalArgumentException`).
+  - OCSP checker: сул RSA түлхүүртэй issuer → `no_issuer` (кэш / сүлжээнээс өмнө, AKI/SKI шалгалттай), delegated
+    responder-ийн сул түлхүүр (exponent ч) → `signature`.
+  - Тамганы бүртгэл (Go PR #74 / TS PR #98): `SealService.registerSealedPdf`, `sealForDocument`, `pades.SealRegistration`,
+    `pades.DocumentSealer`, `SealOptions.qr / docId / fileName`, `Completed.sealRegistration()`, `EidErrorCodes.SEAL_REGISTER`
+    + `SEAL_NOT_FOUND`, `SEAL_DOC_MISMATCH`, `DOC_ID_RESERVED` (төрөлжсөн `EidException.SealNotFound`, `SealDocMismatch`,
+    `DocIdReserved`), `Routes.SEAL_REGISTRATIONS` (contract тест live discovery-ийн `endpoints.seal.registration`,
+    `seal.registerErrorCodes`, `{docId, revIndex}`-тэй тулгана). `qr`-гүй `sealPdf` гаралт өмнөхтэй байт-ижил.
+  - `EidLogin.RateRule` — `maxKeys` (`RateRule.of(max, window, maxKeys)`); 0.2.0-ийн 3 аргументтай constructor хэвээр.
+- Security (интеграторт харагдах өөрчлөлт):
+  - Нэвтрэх cookie-ийн анхдагч нэр `eid_login` → `__Host-eid_login` (Secure, Domain алга, Path `/` үед; бусад үед
+    `eid_login` хэвээр, `cookieName(...)` өгсөн бол өөрчлөгдөхгүй). Шинэчлэх үед явагдаж буй нэвтрэлтүүд нэг удаа дахин
+    эхэлнэ. Хүсэлтэд нэвтрэх cookie нэгээс олон байвал cookie-гүй гэж үзнэ (status `EXPIRED`, callback `eid_error=expired`).
+  - Push rate-limit түлхүүр `push:<регистрийн дугаар>` → `push:<pushKey>` (аудитын HMAC, 32 hex): өөрийн
+    `rateLimit(...)` hook / `RateRule.func` / Redis хязгаарлагч дугаар биш HMAC харна. Олон instance нэг хязгаарлагч
+    хуваалцвал бүгдэд ижил `auditKey` өг (эс бөгөөс түлхүүр instance тус бүр өөр).
+  - Trust pool-д (anchor / intermediate) сул RSA түлхүүртэй гэрчилгээ өгвөл `ResponseValidator` үүсэхгүй (өмнө нь
+    гинжийн шалгалтад `chain.untrusted`).
+- Нийтийн API зөвхөн нэмэгдсэн (0.2.0-тэй source/binary нийцтэй); reason key-ийн нэр солигдоогүй.
+- Яагаад: Go / TS / .NET-тэй ижил corpus v2 ба CA V158-ийн тамганы бүртгэл.
+- Шалгасан: `./gradlew build` macmini (JDK 17) дээр; CI 17/21 Linux/Windows; contract workflow (live discovery).
+
+### ValidatePDF: гарын үсэгтэй PDF-ийг локал шалгах (`EidPades.validatePdf`)
+
+- **Юу:** `EidPades.validatePdf(pdf, ValidatePdfOptions)` → `PdfReport` (`mn.eidmongolia.eid.pades.validate`): Go
+  `pades.ValidatePDF` / TS `validatePdf`-ийн порт — ByteRange/messageDigest, CMS, signing-certificate-v2, гинж (fail-closed:
+  nameConstraints / танихгүй critical extension, RSA ≥ 2048, ECDSA r/s муж), RFC 3161, гарын үсгийн дараах revision
+  ангилагч (харагдах тамга APPEARANCE_SPEC §5), DSS ба онлайн OCSP/CRL, LTV, түвшин; JSON тайлан CA `/v3/validate/pdf`-тэй
+  ижил. `ValidatePdfException` кодууд. Runtime хамааралгүй (гараар бичсэн PDF/DER задлагч).
+- **Яагаад:** Java SDK-г Go / TS-тэй ижил хүрээтэй болгох (parity plan WP 7).
+- **Хаана:** `src/main/java/mn/eidmongolia/eid/pades/validate/`, `pades/ValidateSupport.java`, `EidPades.validatePdf`;
+  corpus `src/test/resources/pades-validate` (Go 67e05f1 = v0.31.0, `scripts/sync-pades-validate.sh`, CI `validate-sync`).
+- **Шалгалт:** corpus 67/67 тайлан яг тэнцүү (харагдах e-Seal / QR тамга — golden v13 бичигчээр); сөрөг тест (байт
+  өөрчлөх, shadow revision, итгэлгүй root, гэмтсэн бүтэц, таслалт / mutation sweep).
+- **Review-ийн засвар (hostile input):** том тоон token / OID-ийн квадрат ажил, давхацсан stream-ийн хуулбар (reader /
+  parser-ийн 256 MiB төсөв, DSS 1 MiB/8 MiB, кэш байтаар), xref stream-ийн өсөлт (W=0, 2^21 id, 128 section), ObjStm
+  толгойг нэг удаа индекслэх, CMS 32 гэрчилгээ, serial ≤ 160 бит, RSA 2048–8192 / e ≤ 2^32−1, DSS нотолгоог нэг удаа
+  шалгах, ижил гарын үсгийн толь нэг удаа; RSA-PSS параметр хатуу, SignerInfo-ийн SHA-1 алгоритм = weak; гэмтсэн
+  extension зөвхөн тэр гарын үсгийг унагана; `platform_attested` зөвхөн өөрчлөгдөөгүй баримтад; тасалдал / OOM
+  залгигдахгүй. **Shadow /Length:** гарын үсгийн revision-д хөдлөөгүй xref-тэй объект тэр revision-ий төгсгөлд багтах
+  ёстой (TS/Go-оос хатуу) — эс бөгөөс `modified_after_signing`.
+
+### ValidatePDF corpus v14: Go / TS-ийн хатуурлын порт (`EidPades.validatePdf`)
+
+- Юу:
+  - Corpus: `src/test/resources/pades-validate` = `eid-mongolia-sdk-go` `222acbd6e769` (v14, 80 тохиолдол: өмнөх 67 байт-ижил
+    + 13 шинэ; `scripts/sync-pades-validate.sh`, CI `validate-sync` `--check`). Тайлан бүхэлдээ Go-тэй тэнцүү 80/80.
+  - Хожмын гарын үсэг: зөвхөн бүрэн бүтэн (integrity) гарын үсэг «гарын үсгийн өргөтгөл» болно; own-signer тамганы `/Name`
+    тэр гарын үсгийн гэрчилгээний харуулах нэртэй (GIVENNAME SURNAME, эс бөгөөс CN) яг тэнцүү байх ёстой (Go extract.go,
+    appearance.go).
+  - Shadow дүрэм: xref мөр нь өөрчлөгдөөгүй объект (ба түүний ObjStm) гарын үсгийн revision-ий байт дотор бүтнээрээ
+    задрах ёстой (Go revisions.go `diff`) — өмнөх final-view extent шалгалтыг сольсон.
+  - Бүтцийн урьдчилсан шалгалт (Go `CheckStructure` / TS `checkStructure`): xref хэсэг ≤ 128, xref stream `/W` 0…8 ба
+    мөрийн урт > 0, `/Index` start + count ≤ 2^21, нийт мөр ≤ 2^21, xref stream-д ганц шүүлтүүр (задалсан хэмжээ ObjStm-тэй
+    хуваалцсан 32 MiB төсөвт), ObjStm-ийн гишүүн хайлтын ажил ≤ 1 GiB. Prepare / complete / suggest-д мөн үйлчилнэ (Go-той ижил).
+  - CMS / цагийн тэмдгийн токены гэрчилгээг задалсны дараа хязгаарлана (≤ 32, serial ≤ 160 бит утгаар, RSA ≤ 8192 бит,
+    e ≤ 2^32−1); TSTInfo serial-ийг утгаар; SignerInfo-ийн MD2/MD5/OIW SHA-1 алгоритм = weak; DSS-ийн давхар заалт массив
+    бүрд нэг удаа.
+- Security (интеграторт харагдах өөрчлөлт):
+  - 128-аас олон incremental update (xref хэсэг) эсвэл маш олон object stream гишүүнтэй баримт → `PDF_INVALID` (өмнө нь
+    `PDF_NO_SIGNATURE` эсвэл удаан задлал); xref stream-ийн `/W` / `/Index` хязгаараас гадуур → `PDF_INVALID`.
+  - Хожмын гарын үсгийн харагдах тамганы `/Name` гэрчилгээний нэрээс ялгаатай, эсвэл тэр гарын үсэг бүрэн бүтэн биш бол
+    өмнөх гарын үсгүүд `modified_after_signing` (өмнө нь `valid` + `extended_by_signatures_only`).
+  - CMS-д 33+ гэрчилгээ, 8192-оос том RSA модуль, 2^32−1-ээс том e, 160-аас урт serial → `malformed_signature`.
+- Нийтийн API өөрчлөгдөөгүй.
+- Хаана: `pades/Structure.java`, `pades/validate/{Extract,Classifier,OwnAppearance,SigMeta,VCrypto,Evaluate,PdfView}.java`;
+  тест `StructureLimitsTest` (хил тус бүр), `ValidateHardeningTest` (дүрэм B, гэрчилгээний хязгаар, сул алгоритмууд).
+- Шалгалт: macmini дээр `./gradlew build` — 331 тест, 0 алдаа, 0 алгассан (ValidatePdfGoldenTest 80/80); PR CI.
+
 ## 0.2.0 — 2026-11-26
 
 The full relying-party SDK in the same artifact (coordinates and `Automatic-Module-Name` `mn.eidmongolia.eid.pades`

@@ -39,7 +39,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.2.0")
+    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.3.0")
 }
 ```
 
@@ -52,7 +52,7 @@ Maven:
 <dependency>
   <groupId>com.github.gerege-systems</groupId>
   <artifactId>eid-mongolia-sdk-java</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
@@ -462,7 +462,7 @@ callback `eid_error=expired`). 0.2.0-оос шинэчлэхэд явагдаж 
 
 ### Дэмжлэгийн хүснэгт (Go / TypeScript SDK-тэй харьцуулбал)
 
-| Боломж | Java 0.2.0 |
+| Боломж | Java 0.3.0 |
 |---|---|
 | Клиент, mTLS, алдаа, live discovery-тэй өдөр бүр тулгадаг замын хүснэгт | ✓ |
 | Auth push / device link, QR ticker, ACSP_V2, interactions | ✓ |

@@ -39,7 +39,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.2.0")
+    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.3.0")
 }
 ```
 
@@ -52,7 +52,7 @@ Maven:
 <dependency>
   <groupId>com.github.gerege-systems</groupId>
   <artifactId>eid-mongolia-sdk-java</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
@@ -465,7 +465,7 @@ having none (status `EXPIRED`, callback `eid_error=expired`). Upgrading from 0.2
 
 ### Support matrix (vs the Go / TypeScript SDKs)
 
-| Capability | Java 0.2.0 |
+| Capability | Java 0.3.0 |
 |---|---|
 | Client, mTLS, errors, route table checked daily against live discovery | ✓ |
 | Auth push / device link, QR ticker, ACSP_V2, interactions | ✓ |

@@ -8,7 +8,7 @@ plugins {
 
 group = "com.github.gerege-systems"
 // JitPack sets VERSION to the git tag; the release workflow does the same. Without it: the version being prepared.
-version = System.getenv("VERSION") ?: "0.2.0"
+version = System.getenv("VERSION") ?: "0.3.0"
 
 java {
     withSourcesJar()
