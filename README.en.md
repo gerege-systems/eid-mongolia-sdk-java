@@ -373,9 +373,9 @@ lookup work (header pairs × inflated length) ≤ 1 GiB in total — beyond any 
 CMS or timestamp token, RSA ≤ 8192 bits, e ≤ 2^32−1, certificate / TSTInfo serial ≤ 160 bits (else
 `malformed_signature`); DSS ≤ 8 MiB decoded in total (a stream referenced twice in one array is read once).
 **Integrator-visible:** a document with more than 128 incremental updates or very many object-stream members →
-`PDF_INVALID`; when a later signature's visible stamp has a `/Name` different from that signature's certificate name
-(GIVENNAME SURNAME, else CN), or that signature fails integrity, the earlier signatures are `modified_after_signing`; an
-MD2/MD5/SHA-1 SignerInfo signature algorithm → `weak_algorithm`.
+`PDF_INVALID`; when a later signature fails integrity, the earlier signatures are `modified_after_signing` (a later
+visible stamp's `/Name` is not compared with its certificate name — corpus v15; `signer_name` comes from the certificate,
+`claimed_name` from `/Name`); an MD2/MD5/SHA-1 SignerInfo signature algorithm → `weak_algorithm`.
 
 ### «Sign in with eID» button backend (`mn.eidmongolia.eid.login`)
 

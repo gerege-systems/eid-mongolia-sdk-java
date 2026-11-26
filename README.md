@@ -370,8 +370,8 @@ xref + object stream нийт ≤ 32 MiB, object stream-ийн гишүүн ха
 эдгээрээс хэтэрвэл `PDF_INVALID`; CMS / цагийн тэмдгийн токенд ≤ 32 гэрчилгээ, RSA ≤ 8192 бит, e ≤ 2^32−1, гэрчилгээ /
 TSTInfo serial ≤ 160 бит (эс бөгөөс `malformed_signature`); DSS-ийн задалсан нийт ≤ 8 MiB (нэг массив дахь давхар заалтыг
 нэг удаа уншина). **Интеграцид харагдах:** 128-аас олон incremental update эсвэл маш олон object stream гишүүнтэй баримт →
-`PDF_INVALID`; хожмын гарын үсгийн харагдах тамганы `/Name` тэр гарын үсгийн гэрчилгээний нэрээс (GIVENNAME SURNAME,
-эс бөгөөс CN) ялгаатай, эсвэл тэр гарын үсэг бүрэн бүтэн биш бол өмнөх гарын үсгүүд `modified_after_signing`;
+`PDF_INVALID`; хожмын гарын үсэг бүрэн бүтэн биш бол өмнөх гарын үсгүүд `modified_after_signing` (хожмын харагдах
+тамганы `/Name`-ийг гэрчилгээний нэртэй харьцуулахгүй — corpus v15; `signer_name` гэрчилгээнээс, `claimed_name` `/Name`-ээс);
 SignerInfo-ийн MD2/MD5/SHA-1 алгоритм → `weak_algorithm`.
 
 ### «eID-ээр нэвтрэх» товчны backend (`mn.eidmongolia.eid.login`)

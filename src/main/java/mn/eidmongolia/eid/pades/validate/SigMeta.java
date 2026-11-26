@@ -10,17 +10,14 @@ final class SigMeta {
     boolean roleOK;
     /** The signer certificate is an e-Seal certificate (APPEARANCE_SPEC.md §6.1): only the seal stamp is accepted. */
     boolean seal;
-    /**
-     * The signer certificate's display name (eidcrypto.SubjectDisplayName; "" when it does not parse). The stamp's /Name
-     * must equal it, so a later signature cannot add a visible stamp in someone else's name (Go appearance.go sigMeta.name).
-     */
-    String name;
+    // The stamp's /Name is NOT compared with the certificate name (corpus v15, Go appearance.go sigMeta): the released
+    // eID desktop client writes the Cyrillic portal name while the certificate name is Latin, integrators may pass their
+    // own signerName, and an untrusted signer chooses its own certificate name anyway. signer_name stays from the certificate.
 
-    SigMeta(int revIndex, String role, boolean roleOK, boolean seal, String name) {
+    SigMeta(int revIndex, String role, boolean roleOK, boolean seal) {
         this.revIndex = revIndex;
         this.role = role;
         this.roleOK = roleOK;
         this.seal = seal;
-        this.name = name;
     }
 }

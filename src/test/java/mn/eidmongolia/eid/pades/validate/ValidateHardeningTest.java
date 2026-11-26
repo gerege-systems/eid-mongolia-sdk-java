@@ -462,7 +462,7 @@ public class ValidateHardeningTest {
         }
     }
 
-    // 12 — later-signature trust (Go extract.go known/metas, appearance.go /Name): corpus v14 inputs
+    // 12 — later-signature trust (Go extract.go known/metas): corpus v14 inputs, v15 expectations
 
     @Test
     public void laterSignatureMustVerifyToExtend() throws Exception {
@@ -479,30 +479,36 @@ public class ValidateHardeningTest {
         assertEquals(1, bad);
     }
 
+    // Corpus v15 (Go 9f68390 TestValidatePDFLaterStampNameNotCompared): the stamp's /Name is not compared with the
+    // certificate name — a mismatching /Name on an integrity-passing later signature does NOT flag earlier signatures.
     @Test
-    public void laterStampNameMustBeTheCertificateName() throws Exception {
-        byte[] control = res("validate/input/later-stamp-name-control.pdf");
-        byte[] mismatch = res("validate/input/later-stamp-name-mismatch.pdf");
-        // mismatch: the later signature verifies, but its /Name (and stamp) say GOLDEN TESTOV while its certificate is
-        // QUALIFIED TESTOV — the stamp check (OwnAppearance) compares against meta.name; the report is in the corpus.
-        Extract.Extracted mx = Extract.extract(mismatch, NO_STAMPS);
-        boolean seen = false;
-        for (Extract.RawSignature s : mx.sigs) {
-            assertTrue(s.integrity);
-            SigMeta m = mx.metas.get(s.objNum);
-            if (m.name.equals("QUALIFIED TESTOV")) {
-                assertEquals("GOLDEN TESTOV", s.signerName);
-                seen = true;
+    public void laterStampNameIsNotCompared() throws Exception {
+        ValidatePdfOptions o = ValidatePdfOptions.builder()
+            .roots(List.of(Cert.pemSingle(res("golden/pki/root.pem"))))
+            .issuers(List.of(Cert.pemSingle(res("golden/pki/04.pem")), Cert.pemSingle(res("validate/pki/05.pem"))))
+            .time(java.time.Instant.parse("2026-10-14T04:00:30Z"))
+            .offline(true)
+            .transport((method, url, ct, body) -> { throw new IOException("offline"); })
+            .build();
+        // mismatch: the later signature's certificate is QUALIFIED TESTOV, its /Name and stamp say GOLDEN TESTOV.
+        String[][] cases = {{"later-stamp-name-mismatch", "GOLDEN TESTOV"}, {"later-stamp-name-control", "QUALIFIED TESTOV"}};
+        for (String[] c : cases) {
+            PdfReport r = mn.eidmongolia.eid.pades.EidPades.validatePdf(res("validate/input/" + c[0] + ".pdf"), o);
+            assertEquals(c[0], 2, r.signatures().size());
+            PdfReport.SignatureReport first = r.signatures().get(0), later = r.signatures().get(1);
+            if (first.coversWholeDocument()) {
+                PdfReport.SignatureReport x = first;
+                first = later;
+                later = x;
             }
+            assertEquals(c[0], "valid", first.indication());
+            assertTrue(c[0] + " " + first.problems(), first.problems().isEmpty());
+            assertTrue(c[0] + ": extended by signatures only", first.extendedBySignaturesOnly());
+            assertTrue(c[0] + ": visible later signature", first.visibleLaterSignature());
+            assertEquals(c[0], 1, first.laterSignatures());
+            assertEquals(c[0], "QUALIFIED TESTOV", later.signerName());
+            assertEquals(c[0], c[1], later.claimedName());
+            assertTrue(c[0], later.visible());
         }
-        assertTrue(seen);
-        Extract.Extracted ex = Extract.extract(control, NO_STAMPS);
-        Extract.RawSignature last = ex.sigs.get(0);
-        for (Extract.RawSignature s : ex.sigs) if (s.signedEnd > last.signedEnd) last = s;
-        assertEquals("QUALIFIED TESTOV", last.signerName);
-        assertEquals(last.signerName, ex.metas.get(last.objNum).name);
-        assertEquals("QUALIFIED TESTOV", Extract.certDisplayName(Cert.pemSingle(res("validate/pki/citizen-qc.pem"))));
-        assertEquals("", Extract.certDisplayName(new byte[] {0x30, 0x00}));
-        assertEquals("", Extract.certDisplayName(null));
     }
 }
