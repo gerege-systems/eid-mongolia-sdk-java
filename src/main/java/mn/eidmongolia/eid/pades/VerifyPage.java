@@ -264,6 +264,9 @@ final class VerifyPage {
             List<String> lines = new ArrayList<>();
             String cur = "";
             for (String w0 : s.split(" ", -1)) {
+                // Go vpage.go wrapLimit: stop once past maxLines — the «…» cut below uses only the first maxLines lines,
+                // so the output is the same, and a huge text no longer costs quadratic time.
+                if (lines.size() > maxLines) break;
                 String word = w0;
                 if (word.isEmpty()) continue;
                 String cand = cur.isEmpty() ? word : cur + " " + word;
@@ -275,7 +278,7 @@ final class VerifyPage {
                     lines.add(cur);
                     cur = "";
                 }
-                while (!fits(id, size, word, limit)) {
+                while (lines.size() <= maxLines && !fits(id, size, word, limit)) {
                     int[] r = word.codePoints().toArray();
                     int n = 1;
                     while (n < r.length && fits(id, size, new String(r, 0, n + 1), limit)) n++;
