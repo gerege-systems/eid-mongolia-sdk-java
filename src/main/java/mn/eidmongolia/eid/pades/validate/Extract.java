@@ -178,10 +178,12 @@ final class Extract {
         if (dss != null) for (RawSignature s : sigs) s.dss = dss;
         Map<Integer, long[]> known = new LinkedHashMap<>();
         Map<Integer, SigMeta> metas = new LinkedHashMap<>();
+        // Only signatures that pass integrity count as signature-only extensions (Go extract.go): a revision whose
+        // "signature" does not verify is classified DSS-only and rejected. name — matched against the stamp's /Name.
         for (RawSignature s : sigs) {
-            if (!s.malformed) {
+            if (!s.malformed && s.integrity) {
                 known.put(s.objNum, s.byteRange);
-                metas.put(s.objNum, new SigMeta(1, "", s.claimedRoles.size() <= 1, sealCertificateDer(s.leaf)));
+                metas.put(s.objNum, new SigMeta(1, "", s.claimedRoles.size() <= 1, sealCertificateDer(s.leaf), certDisplayName(s.leaf)));
             }
         }
         for (Map.Entry<Integer, SigMeta> e : metas.entrySet()) {
@@ -209,6 +211,16 @@ final class Extract {
     }
 
     /** TS sealCertificateDER: an e-Seal certificate (not CA, nonRepudiation without digitalSignature, no EKU). */
+    /** Go certDisplayName: the DER certificate's display name (GIVENNAME SURNAME, else CN); "" when it does not parse. */
+    static String certDisplayName(byte[] der) {
+        if (der == null) return "";
+        try {
+            return Evaluate.displayName(VCrypto.cert(der));
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
     static boolean sealCertificateDer(byte[] der) {
         if (der == null) return false;
         try {
@@ -261,7 +273,7 @@ final class Extract {
         s.subFilter = obj.key("SubFilter").name();
 
         Pkcs7 p7 = parsePkcs7(contents);
-        if (p7 == null || p7.signers.size() != 1) {
+        if (p7 == null || p7.signers.size() != 1 || !boundedCerts(p7.certs)) {
             s.malformed = true;
             return s;
         }
@@ -299,8 +311,41 @@ final class Extract {
     static final String O_SIGNER_ATTR_V2 = "0.4.0.19122.1.1";
     static final String O_ROLE = "2.5.4.72";
     private static final Set<String> STRONG = Set.of(VCrypto.SHA256, VCrypto.SHA384, VCrypto.SHA512);
-    /** SHA-1 signature algorithms named on a SignerInfo (sha1WithRSA, ecdsa-with-SHA1, dsa-with-SHA1): weak, whatever the digest. */
-    private static final Set<String> SHA1_SIG_ALGS = Set.of("1.2.840.113549.1.1.5", "1.2.840.10045.4.1", "1.2.840.10040.4.3");
+    /**
+     * Go weakSignatureOIDs: MD2/MD5/SHA-1 signature algorithms named on a SignerInfo (md2/md5/sha1WithRSAEncryption,
+     * dsa-with-sha1, ecdsa-with-SHA1, OIW sha1WithRSASignature) — weak, whatever the digest.
+     */
+    private static final Set<String> SHA1_SIG_ALGS = Set.of("1.2.840.113549.1.1.2", "1.2.840.113549.1.1.4", "1.2.840.113549.1.1.5",
+        "1.2.840.10040.4.3", "1.2.840.10045.4.1", "1.3.14.3.2.29");
+
+    /**
+     * Go boundedCerts / boundedCert: ≤ {@link #MAX_CMS_CERTS} certificates, each with a serial ≤ 160 bits (magnitude) and,
+     * for RSA, a modulus ≤ 8192 bits and a public exponent ≤ 2^32 − 1. Otherwise the signature is malformed (a timestamp
+     * token: not usable).
+     */
+    static boolean boundedCerts(List<Cert> cs) {
+        if (cs.size() > MAX_CMS_CERTS) return false;
+        for (Cert c : cs) {
+            if (c.serial.abs().bitLength() > VCrypto.MAX_SERIAL_BITS) return false;
+            java.security.PublicKey k = c.publicKey();
+            if (k instanceof java.security.interfaces.RSAPublicKey) {
+                java.security.interfaces.RSAPublicKey r = (java.security.interfaces.RSAPublicKey) k;
+                if (r.getModulus().bitLength() > VCrypto.MAX_RSA_BITS || r.getPublicExponent().bitLength() > 32) return false;
+            } else if (rsaSpki(c)) {
+                return false; // an RSA key the JDK will not load (e.g. modulus > 16384 bits) — outside the bounds anyway
+            }
+        }
+        return true;
+    }
+
+    private static boolean rsaSpki(Cert c) {
+        try {
+            List<Asn1.Node> spki = Asn1.children(Asn1.readNode(c.rawSubjectPublicKeyInfo, 0));
+            return Asn1.oid(Asn1.children(spki.get(0)).get(0)).equals("1.2.840.113549.1.1.1");
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
 
     static final class Attr {
         final String type;
@@ -353,9 +398,9 @@ final class Extract {
                 }
             }
             if (Asn1.at(sd, i) != null && sd.get(i).tag == 0xa0) {
-                List<Asn1.Node> cs = Asn1.children(sd.get(i));
-                if (cs.size() > MAX_CMS_CERTS) return null; // bounded chain-building work per signature
-                for (Asn1.Node c : cs) p.certs.add(VCrypto.cert(c.raw()));
+                // Every certificate must parse; the count / serial / RSA bounds are checked by the caller (boundedCerts),
+                // after a timestamp token's TSTInfo is read, as Go does.
+                for (Asn1.Node c : Asn1.children(sd.get(i))) p.certs.add(VCrypto.certAnySerial(c.raw()));
                 i++;
             }
             if (Asn1.at(sd, i) != null && sd.get(i).tag == 0xa1) i++;
@@ -671,7 +716,8 @@ final class Extract {
                 hashed = Asn1.expect(Asn1.at(mi, 1), Asn1.OCTET_STRING, "hashedMessage").value();
                 if (hashed.length == 0) return out;
                 Asn1.Node sn = Asn1.expect(Asn1.at(info, 3), Asn1.INTEGER, "serial");
-                if (sn.length() > 21) return out; // ≤ 160-bit serial (+ sign byte); a huge one makes the token malformed
+                // TSTInfo serialNumber ≤ 160 bits of magnitude (Go: ts.SerialNumber.BitLen() > maxSerialBits → unusable)
+                if (sn.length() > 64 || Asn1.intValue(sn.value()).abs().bitLength() > VCrypto.MAX_SERIAL_BITS) return out;
                 serial = GoFmt.hexSerial(sn.value());
                 time = Asn1.preciseTime(Asn1.expect(Asn1.at(info, 4), Asn1.GENERALIZED_TIME, "genTime"));
             } catch (RuntimeException e) {
@@ -679,7 +725,7 @@ final class Extract {
             }
             out.time = time;
             out.serial = serial;
-            if (tok.signers.size() != 1) return out;
+            if (tok.signers.size() != 1 || !boundedCerts(tok.certs)) return out;
             Cert tsa = onlySigner(tok);
             if (tsa == null) return out;
             out.tsaCert = tsa.raw;
@@ -775,16 +821,17 @@ final class Extract {
     private static RawDss extractDss(DReader.Value dss) {
         if (!dss.kind().equals("dict")) return null;
         long[] total = {0};
-        java.util.Set<Object> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-        return new RawDss(readDss(dss, "Certs", total, seen), readDss(dss, "OCSPs", total, seen), readDss(dss, "CRLs", total, seen));
+        return new RawDss(readDss(dss, "Certs", total), readDss(dss, "OCSPs", total), readDss(dss, "CRLs", total));
     }
 
     /**
      * One DSS array. Items over 1 MiB are skipped (the raw /Length and the decoded size are checked before anything is
-     * kept); the same stream object is read once; all DSS items together are capped at {@link #MAX_DSS_TOTAL} bytes.
+     * kept); the same stream object is read once per array (Go extractDss); all DSS items together are capped at
+     * {@link #MAX_DSS_TOTAL} bytes, in /Certs → /OCSPs → /CRLs order.
      */
-    private static List<byte[]> readDss(DReader.Value dss, String key, long[] total, java.util.Set<Object> seen) {
+    private static List<byte[]> readDss(DReader.Value dss, String key, long[] total) {
         DReader.Value arr = dss.key(key);
+        java.util.Set<Object> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         List<byte[]> out = new ArrayList<>();
         for (int i = 0; i < arr.len() && i < MAX_DSS_ITEMS; i++) {
             DReader.Value e = arr.index(i);

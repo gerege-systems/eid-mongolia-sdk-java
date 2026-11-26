@@ -377,22 +377,25 @@ public class ValidateHardeningTest {
         }
         assertNotNull(enc);
         assertTrue(Asn1.oid(enc), Asn1.oid(enc).startsWith("1.2.840.113549.1.1."));
-        contents[enc.end - 1] = 0x05;
-        byte[] a = d.clone();
-        byte[] hex = latin1(Text.hex(contents));
-        System.arraycopy(hex, 0, a, gs, hex.length);
-        Extract.RawSignature s = Extract.extract(a, NO_STAMPS).sigs.get(0);
-        assertTrue(s.weakDigest);
+        // sha1WithRSA (.5), md5WithRSA (.4), md2WithRSA (.2) — Go weakSignatureOIDs
+        for (byte last : new byte[] {0x05, 0x04, 0x02}) {
+            contents[enc.end - 1] = last;
+            byte[] a = d.clone();
+            byte[] hex = latin1(Text.hex(contents));
+            System.arraycopy(hex, 0, a, gs, hex.length);
+            Extract.RawSignature s = Extract.extract(a, NO_STAMPS).sigs.get(0);
+            assertTrue("1.2.840.113549.1.1." + last, s.weakDigest);
+        }
     }
 
-    // 10 — at most 32 certificates per CMS
+    // 10 — at most 32 certificates per CMS (Go boundedCerts: checked after parsing, the signature is malformed)
 
     @Test
     public void tooManyEmbeddedCertificatesIsMalformed() {
         byte[] c = Cert.pemSingle(res("golden/pki/root.pem"));
-        assertNotNull(Extract.parsePkcs7(cms(c, 32)));
+        assertTrue(Extract.boundedCerts(Extract.parsePkcs7(cms(c, 32)).certs));
         long t0 = System.nanoTime();
-        assertNull(Extract.parsePkcs7(cms(c, 33)));
+        assertFalse(Extract.boundedCerts(Extract.parsePkcs7(cms(c, 33)).certs));
         within(t0);
     }
 
@@ -423,8 +426,83 @@ public class ValidateHardeningTest {
         }
     }
 
+    /** An unsigned test certificate (the signature is not checked by the parser) with the given serial and RSA key. */
+    private static Cert rsaCert(java.math.BigInteger serial, java.math.BigInteger n, java.math.BigInteger e) {
+        byte[] alg = Der.seq(Der.oid("1.2.840.113549.1.1.11"), Der.nullValue());
+        byte[] name = Der.seq(Der.set(Der.seq(Der.oid("2.5.4.3"), Der.tlv(0x0c, latin1("TEST ONLY BOUNDS")))));
+        byte[] validity = Der.seq(Der.tlv(0x17, latin1("260101000000Z")), Der.tlv(0x17, latin1("310101000000Z")));
+        byte[] key = Der.seq(Der.integer(n), Der.integer(e));
+        byte[] bits = new byte[key.length + 1];
+        System.arraycopy(key, 0, bits, 1, key.length);
+        byte[] spki = Der.seq(Der.seq(Der.oid("1.2.840.113549.1.1.1"), Der.nullValue()), Der.tlv(0x03, bits));
+        byte[] tbs = Der.seq(Der.tlv(0xa0, Der.integer(2)), Der.integer(serial), alg, name, validity, name, spki);
+        return VCrypto.certAnySerial(Der.seq(tbs, alg, Der.tlv(0x03, new byte[257])));
+    }
+
     @Test
     public void oversizedSerialAndRsaKeysAreBounded() {
-        assertTrue(VCrypto.MAX_SERIAL_BITS == 160 && VCrypto.MAX_RSA_BITS == 8192);
+        java.math.BigInteger one = java.math.BigInteger.ONE;
+        java.math.BigInteger n2048 = one.shiftLeft(2047).add(one);
+        java.math.BigInteger e = java.math.BigInteger.valueOf(65537);
+        java.math.BigInteger s160 = one.shiftLeft(160).subtract(one);
+        assertTrue("control", Extract.boundedCerts(List.of(rsaCert(s160, n2048, e))));
+        assertTrue("-2^159 = 160 bits", Extract.boundedCerts(List.of(rsaCert(one.shiftLeft(159).negate(), n2048, e))));
+        assertFalse("serial 161 bits", Extract.boundedCerts(List.of(rsaCert(one.shiftLeft(160), n2048, e))));
+        assertFalse("-2^160 = 161 bits", Extract.boundedCerts(List.of(rsaCert(one.shiftLeft(160).negate(), n2048, e))));
+        assertTrue("modulus 8192 bits", Extract.boundedCerts(List.of(rsaCert(one, one.shiftLeft(8191).add(one), e))));
+        assertFalse("modulus 8193 bits", Extract.boundedCerts(List.of(rsaCert(one, one.shiftLeft(8192).add(one), e))));
+        assertTrue("e = 2^32 - 1", Extract.boundedCerts(List.of(rsaCert(one, n2048, one.shiftLeft(32).subtract(one)))));
+        assertFalse("e = 2^32 + 1", Extract.boundedCerts(List.of(rsaCert(one, n2048, one.shiftLeft(32).add(one)))));
+        // VCrypto.cert (DSS / chain certificates) keeps rejecting a serial over 160 bits at parse time
+        try {
+            VCrypto.cert(rsaCert(one.shiftLeft(160), n2048, e).raw);
+            fail("accepted");
+        } catch (IllegalArgumentException x) {
+            // expected
+        }
+    }
+
+    // 12 — later-signature trust (Go extract.go known/metas, appearance.go /Name): corpus v14 inputs
+
+    @Test
+    public void laterSignatureMustVerifyToExtend() {
+        byte[] d = res("validate/input/later-sig-integrity-failed.pdf");
+        Extract.Extracted ex = Extract.extract(d, NO_STAMPS);
+        assertEquals(2, ex.sigs.size());
+        int bad = 0;
+        for (Extract.RawSignature s : ex.sigs) {
+            if (!s.integrity) {
+                bad++;
+                assertFalse("an unverified signature has no stamp meta", ex.metas.containsKey(s.objNum));
+            }
+        }
+        assertEquals(1, bad);
+    }
+
+    @Test
+    public void laterStampNameMustBeTheCertificateName() {
+        byte[] control = res("validate/input/later-stamp-name-control.pdf");
+        byte[] mismatch = res("validate/input/later-stamp-name-mismatch.pdf");
+        // mismatch: the later signature verifies, but its /Name (and stamp) say GOLDEN TESTOV while its certificate is
+        // QUALIFIED TESTOV — the stamp check (OwnAppearance) compares against meta.name; the report is in the corpus.
+        Extract.Extracted mx = Extract.extract(mismatch, NO_STAMPS);
+        boolean seen = false;
+        for (Extract.RawSignature s : mx.sigs) {
+            assertTrue(s.integrity);
+            SigMeta m = mx.metas.get(s.objNum);
+            if (m.name.equals("QUALIFIED TESTOV")) {
+                assertEquals("GOLDEN TESTOV", s.signerName);
+                seen = true;
+            }
+        }
+        assertTrue(seen);
+        Extract.Extracted ex = Extract.extract(control, NO_STAMPS);
+        Extract.RawSignature last = ex.sigs.get(0);
+        for (Extract.RawSignature s : ex.sigs) if (s.signedEnd > last.signedEnd) last = s;
+        assertEquals("QUALIFIED TESTOV", last.signerName);
+        assertEquals(last.signerName, ex.metas.get(last.objNum).name);
+        assertEquals("QUALIFIED TESTOV", Extract.certDisplayName(Cert.pemSingle(res("validate/pki/citizen-qc.pem"))));
+        assertEquals("", Extract.certDisplayName(new byte[] {0x30, 0x00}));
+        assertEquals("", Extract.certDisplayName(null));
     }
 }

@@ -44,7 +44,6 @@ final class PdfView {
     final Map<Integer, XrefEnt> xref = new LinkedHashMap<>();
     Map<String, Object> trailer = new LinkedHashMap<>();
     private final Map<Integer, Object> objs = new LinkedHashMap<>();
-    private final Map<Integer, Integer> ends = new java.util.HashMap<>();
     private boolean inLength;
     private boolean usedLength;
     private Map<Integer, List<Integer>> refs;
@@ -188,7 +187,6 @@ final class PdfView {
             }
             if (o.num != num || o.gen != e.gen) throw PdfObjError.syntax();
             val = o.val;
-            ends.put(num, o.end);
         } else if (e.kind == ENT_COMP) {
             ObjStm st = objStm(e.off);
             if (e.idx >= st.nums.size() || st.nums.get((int) e.idx) != num
@@ -206,14 +204,6 @@ final class PdfView {
         } else throw PdfObjError.syntax();
         objs.put(num, val);
         return val;
-    }
-
-    /** Byte offset just after "endobj" of uncompressed in-use object num (parses it if needed). */
-    int extentEnd(int num) {
-        get(num);
-        Integer e = ends.get(num);
-        if (e == null) throw PdfObjError.syntax();
-        return e;
     }
 
     /** The object r points at; null for an unused number; a generation mismatch is an error. */
