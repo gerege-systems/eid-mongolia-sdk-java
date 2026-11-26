@@ -87,6 +87,75 @@ public final class EidErrorCodes {
     public static final String DOC_NOT_FOUND = "DOC_NOT_FOUND";
     public static final String PRIOR_MISMATCH = "PRIOR_MISMATCH";
 
+    // Token certificate issuance (409, and 400 APP_ATTESTATION_INVALID; also the session's tokenCertificate.errorCode).
+    public static final String TOKEN_LIMIT_REACHED = "TOKEN_LIMIT_REACHED";
+    public static final String TOKEN_IN_USE = "TOKEN_IN_USE";
+    public static final String TOKEN_SCOPE_CHANGE = "TOKEN_SCOPE_CHANGE";
+    public static final String ACCOUNT_DELETE_PENDING = "ACCOUNT_DELETE_PENDING";
+    public static final String APP_ATTESTATION_INVALID = "APP_ATTESTATION_INVALID";
+    public static final String TOKEN_ISSUANCE_PENDING = "TOKEN_ISSUANCE_PENDING";
+    public static final String KYC_INCOMPLETE = "KYC_INCOMPLETE";
+    public static final String NO_ACTIVE_DEVICE = "NO_ACTIVE_DEVICE";
+    public static final String CSR_KEY_REUSED = "CSR_KEY_REUSED";
+    public static final String CSR_INVALID = "CSR_INVALID";
+    public static final String CSR_KEY_UNSUPPORTED = "CSR_KEY_UNSUPPORTED";
+    public static final String CSR_SIGNATURE_INVALID = "CSR_SIGNATURE_INVALID";
+    public static final String CSR_KEYS_IDENTICAL = "CSR_KEYS_IDENTICAL";
+    public static final String ISSUANCE_FAILED = "ISSUANCE_FAILED";
+    /** 410 (certificate result): the 24 h result window passed — start again. */
+    public static final String RESULT_EXPIRED = "RESULT_EXPIRED";
+    public static final String CSR_DIGEST_MISMATCH = "CSR_DIGEST_MISMATCH";
+    public static final String SIGNER_CERT_CHANGED = "SIGNER_CERT_CHANGED";
+    public static final String ISSUANCE_ERROR = "ISSUANCE_ERROR";
+    public static final String REGISTRY_FAILED = "REGISTRY_FAILED";
+    // Token authentication.
+    /** 403: token sign-in is only for registered (standard UUID) RPs. */
+    public static final String RP_REQUIRED = "RP_REQUIRED";
+    /** 410: challenge unknown or expired — request a new one. */
+    public static final String CHALLENGE_EXPIRED = "CHALLENGE_EXPIRED";
+    /** 409: challenge already used. */
+    public static final String CHALLENGE_USED = "CHALLENGE_USED";
+    /** 400: not an eID token AUTH certificate (EC P-256, registered). */
+    public static final String CERT_INVALID = "CERT_INVALID";
+    /** 409: certificate inactive, revoked or expired. */
+    public static final String CERT_NOT_ACTIVE = "CERT_NOT_ACTIVE";
+
+    // POST /share.
+    public static final String FILE_EMPTY = "FILE_EMPTY";
+    public static final String RECIPIENT_REQUIRED = "RECIPIENT_REQUIRED";
+    public static final String TOO_MANY_RECIPIENTS = "TOO_MANY_RECIPIENTS";
+    public static final String RECIPIENT_INVALID = "RECIPIENT_INVALID";
+    public static final String RECIPIENT_DUPLICATE = "RECIPIENT_DUPLICATE";
+    /** 413. */
+    public static final String FILE_TOO_LARGE = "FILE_TOO_LARGE";
+    /** 415. */
+    public static final String FILE_TYPE_NOT_SUPPORTED = "FILE_TYPE_NOT_SUPPORTED";
+    /** 422 + {@link EidException.Share#reason()}. */
+    public static final String FILE_NOT_SIGNED = "FILE_NOT_SIGNED";
+    /** 502 + sent / failed / recipients. */
+    public static final String MAIL_FAILED = "MAIL_FAILED";
+    /** 503 (older CA). */
+    public static final String SHARE_DISABLED = "SHARE_DISABLED";
+    public static final String MAIL_UNAVAILABLE = "MAIL_UNAVAILABLE";
+    public static final String VALIDATOR_UNAVAILABLE = "VALIDATOR_UNAVAILABLE";
+    public static final String VALIDATOR_BUSY = "VALIDATOR_BUSY";
+
+    /** Token codes (Go {@code TokenErrorCodes}, same order; shared codes included). */
+    public static final List<String> TOKEN = List.of(TOKEN_LIMIT_REACHED, TOKEN_IN_USE, TOKEN_SCOPE_CHANGE,
+        ACCOUNT_DELETE_PENDING, APP_ATTESTATION_INVALID, TOKEN_ISSUANCE_PENDING, KYC_INCOMPLETE, NO_ACTIVE_DEVICE,
+        CSR_KEY_REUSED, CSR_INVALID, CSR_KEY_UNSUPPORTED, CSR_SIGNATURE_INVALID, CSR_KEYS_IDENTICAL, ISSUANCE_FAILED,
+        RESULT_EXPIRED, CSR_DIGEST_MISMATCH, SIGNER_CERT_CHANGED, ISSUANCE_ERROR, REGISTRY_FAILED,
+        RP_REQUIRED, CHALLENGE_EXPIRED, CHALLENGE_USED, CERT_INVALID, CERT_NOT_ACTIVE,
+        REQUEST_INVALID, SIGNATURE_INVALID, SESSION_MISMATCH, SESSION_NOT_COMPLETE, SESSION_FAILED,
+        REPRESENTATION_REVOKED, REPRESENTATION_DENIED, REPRESENTATION_PENDING, REPRESENTATION_EXPIRED,
+        ORG_NOT_ACTIVE, ORG_NOT_FOUND, SIGNER_UNIDENTIFIED,
+        RATE_LIMITED, STATE_UNAVAILABLE, ISSUANCE_PENDING);
+
+    /** POST /share codes (Go {@code ShareErrorCodes}, same order). */
+    public static final List<String> SHARE = List.of(REQUEST_INVALID, FILE_EMPTY, RECIPIENT_REQUIRED, TOO_MANY_RECIPIENTS,
+        RECIPIENT_INVALID, RECIPIENT_DUPLICATE, FILE_TOO_LARGE, FILE_TYPE_NOT_SUPPORTED, FILE_NOT_SIGNED, RATE_LIMITED,
+        MAIL_FAILED, SHARE_DISABLED, MAIL_UNAVAILABLE, VALIDATOR_UNAVAILABLE, VALIDATOR_BUSY);
+
     /** Codes {@link EidException.Api#retryable()} recognises (Go {@code RetryableCodes}, TS {@code RETRYABLE_ERROR_CODES}). */
     public static final List<String> RETRYABLE = List.of(RATE_LIMITED, STATE_UNAVAILABLE, ISSUANCE_PENDING);
 

@@ -15,7 +15,7 @@ import java.util.Map;
  * {@code crypto.go}, {@code certchoice.go}, {@code validator.go} {@code UserChallengeOf}; TS {@code crypto.ts}).
  */
 public final class EidCrypto {
-    private static final SecureRandom RANDOM = new SecureRandom();
+    static final SecureRandom RANDOM = new SecureRandom();
 
     private EidCrypto() {
     }

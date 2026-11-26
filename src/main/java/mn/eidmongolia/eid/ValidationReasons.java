@@ -88,4 +88,28 @@ public final class ValidationReasons {
     public static final String REVOCATION_REVOKED = "revocation.revoked";
     /** Revocation: no answer and the mode is hard-fail. */
     public static final String REVOCATION_UNKNOWN = "revocation.unknown";
+
+    // ── Java-only keys (not in rp-conformance/1; the Go / TS SDKs return prose ValidationError reasons here) ──
+
+    /**
+     * The certificate subject has more than one SERIALNUMBER or more than one CN — the identity would depend on which
+     * one a parser picks (cross-SDK hardening, rejected before any other certificate check).
+     */
+    public static final String CERT_SUBJECT_AMBIGUOUS = "cert.subject_ambiguous";
+    /** A seal / seal-request / seal-grant response lacks a required member or does not decode. */
+    public static final String SEAL_RESPONSE = "seal.response";
+    /** The seal response's certificate is not an e-Seal certificate (KeyUsage = nonRepudiation only, no EKU). */
+    public static final String SEAL_NOT_ESEAL = "seal.not_eseal";
+    /** The seal signature does not verify over the digest with the response's certificate. */
+    public static final String SEAL_SIGNATURE = "seal.signature";
+    /** Token: the CA's csrAuthSha256 / csrSignSha256 differ from the CSRs sent, or a dryRun answer was not a dry run. */
+    public static final String TOKEN_RESPONSE = "token.response";
+    /** Token: an issued certificate does not decode or its key differs from the CSR's (do not write it to the token). */
+    public static final String TOKEN_CERTIFICATE = "token.certificate";
+    /** Token auth: the challenge is bound to another RP (rpUUID), or rpUUID / challenge are malformed. */
+    public static final String TOKEN_CHALLENGE = "token.challenge";
+    /** Token auth: the raw r‖s signature does not verify over the token-auth digest (EC P-256). */
+    public static final String TOKEN_SIGNATURE = "token.signature";
+    /** Token auth: the CA did not answer endResult OK, or identity.etsi is not the certificate's SERIALNUMBER. */
+    public static final String TOKEN_RESULT = "token.result";
 }

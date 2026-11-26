@@ -36,10 +36,27 @@ public final class EidQrException extends RuntimeException {
     /** data (source, fields, photo) limits violated. */
     public static final String DATA_INVALID = "QR_DATA_INVALID";
 
+    /** 404 from the CA: the QR token is unknown, expired (120 s) or already used — have the citizen show a new QR (cause: the RP-API error). */
+    public static final String TOKEN_INVALID = "QR_TOKEN_INVALID";
+    /** The session was still RUNNING when the wait ended — the citizen has not answered yet. */
+    public static final String PENDING = "QR_PENDING";
+    /** 410 from the CA: the presentation was already read or has expired — scan a new QR (cause: the RP-API error). */
+    public static final String PRESENTATION_GONE = "QR_PRESENTATION_GONE";
+
     private final String code;
 
     EidQrException(String code, String reason) {
         super(code + ": " + reason);
+        this.code = code;
+    }
+
+    /**
+     * For the RP-API «My QR» client ({@code mn.eidmongolia.eid.QrService}, Go {@code QRError} with {@code Cause}).
+     *
+     * @param cause the underlying RP-API error, or null
+     */
+    public EidQrException(String code, String reason, Throwable cause) {
+        super(code + ": " + reason, cause);
         this.code = code;
     }
 

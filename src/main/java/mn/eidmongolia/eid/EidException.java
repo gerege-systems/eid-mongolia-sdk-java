@@ -592,6 +592,139 @@ public class EidException extends RuntimeException {
         }
     }
 
+    /**
+     * {@link SealService#waitForCertificate}: the request ended without a certificate (Go {@code SealRequestError}).
+     * {@link #outcome()} REJECTED / EXPIRED / FAILED ({@link #failure()} carries the code) → a new
+     * {@link SealService#requestCertificate}; {@link SealCertificateRequest#STATUS_TIMEOUT} — the wait's timeout passed while
+     * the request is still PENDING on the server (wait again with the same id). {@link #code()} = failure when set, else
+     * the outcome — {@link EidErrorCodes#SEAL_SERVICE_DISABLED} when issuance was switched off after the ADMIN approved.
+     */
+    public static final class SealRequestFailed extends EidException {
+        private static final long serialVersionUID = 1L;
+        private final String outcome;
+        private final String requestId;
+        private final String failure;
+
+        SealRequestFailed(String outcome, String requestId, String failure) {
+            super("eid: тамганы гэрчилгээний хүсэлт " + outcome + (failure == null || failure.isEmpty() ? "" : " (" + failure + ")"));
+            this.outcome = outcome;
+            this.requestId = requestId == null ? "" : requestId;
+            this.failure = failure == null ? "" : failure;
+        }
+
+        public String outcome() {
+            return outcome;
+        }
+
+        public String requestId() {
+            return requestId;
+        }
+
+        /** EXPIRED | SEAL_ISSUANCE_FAILED | PUSH_FAILED | SEAL_SERVICE_DISABLED; "" otherwise. */
+        public String failure() {
+            return failure;
+        }
+
+        @Override
+        public String code() {
+            return failure.isEmpty() ? outcome : failure;
+        }
+    }
+
+    /**
+     * {@link SealService#waitForGrant}: the grant request ended without APPROVED (Go {@code SealGrantError}).
+     * {@link #outcome()} REJECTED / EXPIRED / FAILED / REVOKED ({@link #failure()} carries the code) → a new sign-in +
+     * {@link SealService#requestGrant}; {@link SealGrant#STATUS_TIMEOUT} — the wait's timeout passed while the request is
+     * still PENDING. {@link #code()} = failure when set, else the outcome.
+     */
+    public static final class SealGrantFailed extends EidException {
+        private static final long serialVersionUID = 1L;
+        private final String outcome;
+        private final String grantId;
+        private final String failure;
+
+        SealGrantFailed(String outcome, String grantId, String failure) {
+            super("eid: тамганы эрхийн хүсэлт " + outcome + (failure == null || failure.isEmpty() ? "" : " (" + failure + ")"));
+            this.outcome = outcome;
+            this.grantId = grantId == null ? "" : grantId;
+            this.failure = failure == null ? "" : failure;
+        }
+
+        public String outcome() {
+            return outcome;
+        }
+
+        public String grantId() {
+            return grantId;
+        }
+
+        /** EXPIRED, PUSH_FAILED, RP_NOT_ACTIVE, ORG_NOT_ACTIVE, RP_CHANGED, RP_PERMISSIONS_FULL, CANCELLED, ORG_REVOKED; "" otherwise. */
+        public String failure() {
+            return failure;
+        }
+
+        @Override
+        public String code() {
+            return failure.isEmpty() ? outcome : failure;
+        }
+    }
+
+    /**
+     * A POST /share CA error (Go {@code ShareError}): every 4xx/5xx except 401 ({@link Authentication}) and 403
+     * ({@link Forbidden}). An {@link Api}, so {@link #code()}, {@link #status()}, {@link #retryAfter()},
+     * {@link #retryable()} work as usual; {@link EidErrorCodes#SHARE} lists the codes. A non-JSON (proxy) body leaves the
+     * code "".
+     */
+    public static final class Share extends Api {
+        private static final long serialVersionUID = 1L;
+        private final String reason;
+        private final int sent;
+        private final int failed;
+        private final List<String> recipients;
+
+        Share(Api e) {
+            super(e.status(), e.code(), e.serverMessage(), e.body(), e.service(), e.retryAfter(), e.headers());
+            Object v = null;
+            try {
+                v = Json.parse(e.body());
+            } catch (IllegalArgumentException ignored) {
+                // not CA JSON
+            }
+            Json.Obj o = v instanceof Json.Obj ? (Json.Obj) v : new Json.Obj();
+            this.reason = o.optString("reason");
+            this.sent = (int) Math.max(0, Math.min(Integer.MAX_VALUE, o.optLong("sent", 0)));
+            this.failed = (int) Math.max(0, Math.min(Integer.MAX_VALUE, o.optLong("failed", 0)));
+            this.recipients = Dto.strings(o, "recipients");
+        }
+
+        @Override
+        public String getMessage() {
+            if (code().isEmpty()) return "eid: share " + status();
+            if (!reason.isEmpty()) return "eid: share " + status() + " " + code() + " (" + reason + ")";
+            return "eid: share " + status() + " " + code();
+        }
+
+        /** 422 FILE_NOT_SIGNED: no_signature | invalid | untrusted ({@link ShareRequest#REASON_NO_SIGNATURE} …); else "". */
+        public String reason() {
+            return reason;
+        }
+
+        /** 502 MAIL_FAILED: the number of e-mails sent. */
+        public int sent() {
+            return sent;
+        }
+
+        /** 502 MAIL_FAILED: the number that failed. */
+        public int failed() {
+            return failed;
+        }
+
+        /** 502 MAIL_FAILED: per recipient in {@link ShareRequest#to()} order, "sent" | "failed" — resend only the failed ones. */
+        public List<String> recipients() {
+            return recipients;
+        }
+    }
+
     // ── path masking (Go errors.go maskPath) ──
 
     private static final java.util.regex.Pattern IDENTIFIER_IN_PATH =
