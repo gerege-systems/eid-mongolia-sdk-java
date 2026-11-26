@@ -358,8 +358,13 @@ public final class EidQr {
      * PAdES LTV rule: «unknown» → QR_REVOCATION_UNKNOWN and a 24 h window; the LTV rule itself is unchanged.)
      */
     static String defaultRevocation(Cert leaf, Cert issuer) {
+        return revocationStatus(DefaultOcsp.CHECKER, leaf, issuer);
+    }
+
+    /** [checker]'s answer as the {@link RevocationCheck} string ("good" | "revoked" | "unknown"). */
+    static String revocationStatus(OcspRevocationChecker checker, Cert leaf, Cert issuer) {
         try {
-            RevocationStatus s = DefaultOcsp.CHECKER.check(leaf.x509, issuer.x509);
+            RevocationStatus s = checker.check(leaf.x509, issuer.x509);
             return s == RevocationStatus.GOOD ? "good" : s == RevocationStatus.REVOKED ? "revoked" : "unknown";
         } catch (EidException e) {
             return "unknown";

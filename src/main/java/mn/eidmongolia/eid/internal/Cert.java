@@ -151,7 +151,7 @@ public final class Cert {
     }
 
     /**
-     * Go `bytes.Equal(c.RawIssuer, issuer.RawSubject) && c.CheckSignatureFrom(issuer) == nil`: the issuer must be a CA
+     * Go {@code bytes.Equal(c.RawIssuer, issuer.RawSubject) && c.CheckSignatureFrom(issuer) == nil}: the issuer must be a CA
      * allowed to sign certificates (basicConstraints cA, keyUsage keyCertSign when present).
      */
     public boolean issuedBy(Cert issuer) {

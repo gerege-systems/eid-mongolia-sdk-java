@@ -28,7 +28,7 @@ public final class Text {
         return new String(c);
     }
 
-    /** PDF hex string «<…>», lowercase. */
+    /** PDF hex string «{@code <…>}», lowercase. */
     public static String hexString(byte[] raw) {
         return "<" + hex(raw) + ">";
     }
