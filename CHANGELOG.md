@@ -6,7 +6,7 @@
 
 Same artifact and coordinates (`com.github.gerege-systems:eid-mongolia-sdk-java`, `Automatic-Module-Name`
 `mn.eidmongolia.eid.pades`). New: `EidPades.validatePdf` — local validation of a signed PDF with the same report as
-Go / TS and the CA `/v3/validate/pdf` (corpus v14, 80/80); seal registration (`seal().registerSealedPdf`,
+Go / TS and the CA `/v3/validate/pdf` (corpus v15, 80/80); seal registration (`seal().registerSealedPdf`,
 `sealForDocument`, `SealOptions.qr / docId / fileName`); PAdES golden v13 — the organisation seal stamp, visible by
 default in `sealPdf`; rp-conformance corpus v2 hardening (login cookie `__Host-eid_login`, hashed push rate-limit keys,
 validator / OCSP weak-key rules, `RateRule.maxKeys`). The public API only gained members (source and binary compatible
@@ -27,9 +27,8 @@ with 0.2.0; see the `RateRule` note below). Read **Upgrade notes** before upgrad
   `/W` / `/Index`, entry counts, decompression and object-stream lookup work, applied by `prepare`, `complete`,
   `suggestPlacement`, `sealPdf` and `validatePdf`; the validator bounds CMS / timestamp certificates (≤ 32, serial
   ≤ 160 bits, RSA ≤ 8192 bits, e ≤ 2^32−1) and treats MD2 / MD5 / OIW SHA-1 SignerInfo algorithms as weak.
-- **Later-signature rule:** only an intact later signature counts as an extension of an earlier one, and its visible
-  stamp's `/Name` must equal its certificate's display name — otherwise the earlier signatures are
-  `modified_after_signing`.
+- **Later-signature rule:** only a later signature that passes integrity counts as an extension of an earlier one — a
+  revision whose signature does not verify makes the earlier signatures `modified_after_signing`.
 
 ### Upgrade notes (from 0.2.0)
 
@@ -53,8 +52,6 @@ with 0.2.0; see the `RateRule` note below). Read **Upgrade notes** before upgrad
 - Documents with more than 128 xref sections (incremental updates) or very large object streams are refused at
   `prepare` / `sealPdf` (`PDF_INVALID`) and reported `PDF_INVALID` by the validator (was `PDF_NO_SIGNATURE` or slow
   parsing); xref stream `/W` / `/Index` out of range likewise.
-- A later visible stamp whose `/Name` differs from the certificate display name (GIVENNAME SURNAME, else CN) makes the
-  earlier signatures `modified_after_signing` (was `valid` + `extended_by_signatures_only`).
 - A certificate with a weak (< 2048-bit) RSA key in the trust pool (anchors / intermediates) is now a configuration
   error: building the `ResponseValidator` throws `IllegalArgumentException` (was `chain.untrusted` at validation).
 
@@ -142,9 +139,7 @@ with 0.2.0; see the `RateRule` note below). Read **Upgrade notes** before upgrad
 - Юу:
   - Corpus: `src/test/resources/pades-validate` = `eid-mongolia-sdk-go` `222acbd6e769` (v14, 80 тохиолдол: өмнөх 67 байт-ижил
     + 13 шинэ; `scripts/sync-pades-validate.sh`, CI `validate-sync` `--check`). Тайлан бүхэлдээ Go-тэй тэнцүү 80/80.
-  - Хожмын гарын үсэг: зөвхөн бүрэн бүтэн (integrity) гарын үсэг «гарын үсгийн өргөтгөл» болно; own-signer тамганы `/Name`
-    тэр гарын үсгийн гэрчилгээний харуулах нэртэй (GIVENNAME SURNAME, эс бөгөөс CN) яг тэнцүү байх ёстой (Go extract.go,
-    appearance.go).
+  - Хожмын гарын үсэг: зөвхөн бүрэн бүтэн (integrity) гарын үсэг «гарын үсгийн өргөтгөл» болно (Go extract.go).
   - Shadow дүрэм: xref мөр нь өөрчлөгдөөгүй объект (ба түүний ObjStm) гарын үсгийн revision-ий байт дотор бүтнээрээ
     задрах ёстой (Go revisions.go `diff`) — өмнөх final-view extent шалгалтыг сольсон.
   - Бүтцийн урьдчилсан шалгалт (Go `CheckStructure` / TS `checkStructure`): xref хэсэг ≤ 128, xref stream `/W` 0…8 ба
@@ -156,13 +151,30 @@ with 0.2.0; see the `RateRule` note below). Read **Upgrade notes** before upgrad
 - Security (интеграторт харагдах өөрчлөлт):
   - 128-аас олон incremental update (xref хэсэг) эсвэл маш олон object stream гишүүнтэй баримт → `PDF_INVALID` (өмнө нь
     `PDF_NO_SIGNATURE` эсвэл удаан задлал); xref stream-ийн `/W` / `/Index` хязгаараас гадуур → `PDF_INVALID`.
-  - Хожмын гарын үсгийн харагдах тамганы `/Name` гэрчилгээний нэрээс ялгаатай, эсвэл тэр гарын үсэг бүрэн бүтэн биш бол
-    өмнөх гарын үсгүүд `modified_after_signing` (өмнө нь `valid` + `extended_by_signatures_only`).
+  - Хожмын гарын үсэг бүрэн бүтэн биш бол өмнөх гарын үсгүүд `modified_after_signing` (өмнө нь `valid` +
+    `extended_by_signatures_only`).
   - CMS-д 33+ гэрчилгээ, 8192-оос том RSA модуль, 2^32−1-ээс том e, 160-аас урт serial → `malformed_signature`.
 - Нийтийн API өөрчлөгдөөгүй.
 - Хаана: `pades/Structure.java`, `pades/validate/{Extract,Classifier,OwnAppearance,SigMeta,VCrypto,Evaluate,PdfView}.java`;
   тест `StructureLimitsTest` (хил тус бүр), `ValidateHardeningTest` (дүрэм B, гэрчилгээний хязгаар, сул алгоритмууд).
 - Шалгалт: macmini дээр `./gradlew build` — 331 тест, 0 алдаа, 0 алгассан (ValidatePdfGoldenTest 80/80); PR CI.
+
+### ValidatePDF corpus v15: тамганы `/Name`-ийг гэрчилгээний нэртэй харьцуулахгүй (`EidPades.validatePdf`)
+
+- Юу: v14-ийн B дүрмийн тамганы `/Name`-ийг гэрчилгээний нэртэй тулгах хэсгийг хассан (Go `9f68390` appearance.go /
+  extract.go): `OwnAppearance`-ийн шалгалт, `SigMeta.name`, `Extract.certDisplayName`. Нөгөө хэсэг хэвээр — зөвхөн бүрэн
+  бүтэн (integrity) хожмын гарын үсэг өргөтгөл болно. `/Name`-ийн уртын хязгаар ба тамганы бусад шалгалт хэвээр;
+  тайлангийн `signer_name` гэрчилгээнээс, `claimed_name` `/Name`-ээс.
+- Интеграторт харагдах: бүрэн бүтэн хожмын гарын үсгийн тамганы `/Name` гэрчилгээний нэрээс зөрсөн ч өмнөх гарын
+  үсгүүд `valid` (`extended_by_signatures_only`, `visible_later_signature`). Тулгалт нь зөвхөн main дээр (v14) байсан,
+  ямар ч release-д ороогүй.
+- Яагаад: гаргасан eID Windows desktop клиент `/Name`-д порталын кирилл нэр бичдэг (гэрчилгээнийх латин), интегратор
+  өөрийн `signerName` өгч болно — хууль ёсны давхар гарын үсэгтэй баримт өөрчлөгдсөн гэж мэдээлэгдэж байв; итгэмжлэгдээгүй
+  зурагч гэрчилгээнийхээ нэрийг өөрөө сонгодог тул харьцуулалт хамгаалалт нэмдэггүй.
+- Хаана: `pades/validate/{OwnAppearance,SigMeta,Extract}.java`; corpus `src/test/resources/pades-validate` =
+  `eid-mongolia-sdk-go` `9f6839060115` (v15, 80 тохиолдол, зөвхөн `later-stamp-name-mismatch`-ийн хүлээгдэх тайлан өөрчлөгдсөн);
+  тест `ValidateHardeningTest.laterStampNameIsNotCompared` (хуучин нэр тулгах тестийг сольсон), corpus version = 15 баталгаа.
+- Шалгалт: macmini дээр `./gradlew build` — 331 тест, 0 алдаа (ValidatePdfGoldenTest 80/80); PR #17 CI.
 
 ## 0.2.0 — 2026-11-26
 
