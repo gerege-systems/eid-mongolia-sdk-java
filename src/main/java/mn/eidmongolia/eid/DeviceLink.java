@@ -4,10 +4,12 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Locale;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -117,5 +119,44 @@ public final class DeviceLink {
             throw new IllegalStateException("HmacSHA256", e);
         }
         return unprotected + "&authCode=" + Base64.getUrlEncoder().withoutPadding().encodeToString(mac);
+    }
+
+    /**
+     * For SSE / WebSocket (Go {@code TickQRDeviceLink}, TS {@code qrDeviceLinkTicker}): emits the QR link to
+     * {@code onLink} at once, then every {@code interval} (null / ≤ 0 = 1 s), blocking the calling thread until it is
+     * interrupted (end of session / client gone: interrupt the thread, e.g. {@code Future.cancel(true)}). Ticks missed
+     * by a slow {@code onLink} are dropped, not bunched. The input's deviceLinkType is forced to QR and its {@code now} is
+     * replaced by the tick time. Not needed with HTTP polling — call {@link #build} per request instead.
+     *
+     * @throws EidException.DeviceLink invalid input, thrown by the FIRST tick before anything is emitted
+     * @throws InterruptedException when the thread is interrupted (the normal way to stop)
+     */
+    public static void tickQr(DeviceLinkInput input, Duration interval, Consumer<String> onLink) throws InterruptedException {
+        tickQr(input, interval, onLink, Clock.systemUTC(), d -> Thread.sleep(d.toMillis(), d.toNanosPart() % 1_000_000));
+    }
+
+    /** Sleeps for a duration (tests replace it with a fake clock). */
+    @FunctionalInterface
+    interface Sleeper {
+        void sleep(Duration d) throws InterruptedException;
+    }
+
+    static void tickQr(DeviceLinkInput input, Duration interval, Consumer<String> onLink, Clock clock, Sleeper sleeper)
+        throws InterruptedException {
+        Duration iv = interval == null || interval.isZero() || interval.isNegative() ? Duration.ofSeconds(1) : interval;
+        DeviceLinkInput.Builder in = input.toBuilder().deviceLinkType(DeviceLinkType.QR);
+        Instant start = clock.instant();
+        onLink.accept(build(in.now(start).build()));
+        long ivNanos = iv.toNanos();
+        while (true) {
+            if (Thread.interrupted()) throw new InterruptedException();
+            Instant now = clock.instant();
+            long elapsed = Duration.between(start, now).toNanos();
+            long k = elapsed < 0 ? 1 : elapsed / ivNanos + 1; // the next tick strictly after now
+            Duration wait = Duration.between(now, start.plusNanos(k * ivNanos));
+            if (!wait.isZero() && !wait.isNegative()) sleeper.sleep(wait);
+            if (Thread.interrupted()) throw new InterruptedException();
+            onLink.accept(build(in.now(clock.instant()).build()));
+        }
     }
 }

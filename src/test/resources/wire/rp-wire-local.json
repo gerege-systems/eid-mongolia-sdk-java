@@ -1,0 +1,350 @@
+{
+  "format": "rp-wire/0-local",
+  "note": "Interim wire vectors ported by hand from the Go/TS test suites (source per vector). Replaced by the cross-SDK conformance corpus (Go testdata/conformance, tag rp-conformance-v1) once it exists. Credentials: rpUuid rp-uuid, rpName «Гэрээний систем» (Go client_test.go creds); default certificateLevel QUALIFIED; clock 2026-10-14T12:00:00Z; default sign TTL 600 s. In an expected string \"<any>\" matches any non-empty string.",
+  "vectors": [
+    {
+      "name": "auth-notification-etsi-callback-onbehalf",
+      "source": "Go client_test.go TestAuth_RequestBodyAndParse",
+      "op": "auth.notificationByEtsi",
+      "input": {"id": "PNOMN-12345678", "interactions": [{"type": "displayTextAndPIN", "displayText60": "Нэвтрэх"}],
+        "options": {"callbackUrl": " https://rp.test/cb ", "onBehalfOf": " NTRMN-6235972 "}},
+      "request": {"method": "POST", "path": "/authentication/notification/etsi/PNOMN-12345678", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "ACSP_V2",
+        "signatureProtocolParameters": {"rpChallenge": "<any>", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-512"}},
+        "interactions": "W3sidHlwZSI6ImRpc3BsYXlUZXh0QW5kUElOIiwiZGlzcGxheVRleHQ2MCI6ItCd0Y3QstGC0YDRjdGFIn1d",
+        "initialCallbackUrl": "https://rp.test/cb", "onBehalfOf": "NTRMN-6235972"}},
+      "response": {"status": 200, "body": {"sessionID": "s1", "vc": {"type": "alphaNumeric5", "value": "90177"}}},
+      "expect": {"sessionId": "s1", "vc": "90177", "expiresAt": null, "acsp.initialCallbackUrl": "https://rp.test/cb",
+        "acsp.flowTypes": ["Notification", "App2App", "Web2App"], "acsp.signatureAlgorithm": "rsassa-pss",
+        "acsp.hashAlgorithm": "SHA-512", "acsp.relyingPartyName": "Гэрээний систем", "rpChallenge=acsp.rpChallenge": true,
+        "acsp.interactions=request.interactions": true, "acsp.rpChallenge=request.rpChallenge": true}
+    },
+    {
+      "name": "auth-device-link-anonymous-defaults",
+      "source": "Go client_test.go TestAuth_RequestBodyAndParse (device link)",
+      "op": "auth.deviceLinkAnonymous",
+      "input": {},
+      "request": {"method": "POST", "path": "/authentication/device-link/anonymous", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "ACSP_V2",
+        "signatureProtocolParameters": {"rpChallenge": "<any>", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-512"}},
+        "interactions": "W10="}},
+      "response": {"status": 200, "body": {"sessionID": "s2", "sessionToken": "t", "sessionSecret": "c2VjcmV0",
+        "deviceLinkBase": "https://ca.eidmongolia.mn/dl", "vc": "04821"}},
+      "expect": {"sessionId": "s2", "vc": "04821", "sessionToken": "t", "deviceLinkBase": "https://ca.eidmongolia.mn/dl",
+        "sessionType": "auth", "acsp.flowTypes": ["QR"], "expiresAt": null, "receivedAt": "2026-10-14T12:00:00Z"}
+    },
+    {
+      "name": "auth-notification-document-options",
+      "source": "Go session_start_test.go TestSessionStartCAExpiresAt + TS auth.ts baseBody (option mapping)",
+      "op": "auth.notificationByDocument",
+      "input": {"documentNumber": "PNOMN-12345678-MOCK-Q", "interactions": [],
+        "options": {"certificateLevel": "QSCD", "hashAlgorithm": "SHA-256", "signatureAlgorithm": "sha256WithRSAEncryption"}},
+      "request": {"method": "POST", "path": "/authentication/notification/document/PNOMN-12345678-MOCK-Q", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QSCD",
+        "signatureProtocol": "ACSP_V2",
+        "signatureProtocolParameters": {"rpChallenge": "<any>", "signatureAlgorithm": "sha256WithRSAEncryption",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10="}},
+      "response": {"status": 200, "body": {"sessionID": "s3", "vc": {"type": "alphaNumeric5", "value": "54321"},
+        "expiresAt": "2026-10-14T14:10:00Z"}},
+      "expect": {"sessionId": "s3", "vc": "54321", "expiresAt": "2026-10-14T14:10:00Z", "acsp.flowTypes": ["Notification"],
+        "acsp.hashAlgorithm": "SHA-256", "acsp.initialCallbackUrl": ""}
+    },
+    {
+      "name": "auth-device-link-etsi-callback",
+      "source": "Go auth.go DeviceLinkByEtsi + session_start_test.go TestSessionStartCAExpiresAt",
+      "op": "auth.deviceLinkByEtsi",
+      "input": {"id": "PNOMN-12345678", "interactions": [{"type": "displayTextAndPIN", "displayText60": "Нэвтрэх"}],
+        "options": {"callbackUrl": "https://rp.example.mn/cb"}},
+      "request": {"method": "POST", "path": "/authentication/device-link/etsi/PNOMN-12345678", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "ACSP_V2",
+        "signatureProtocolParameters": {"rpChallenge": "<any>", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-512"}},
+        "interactions": "W3sidHlwZSI6ImRpc3BsYXlUZXh0QW5kUElOIiwiZGlzcGxheVRleHQ2MCI6ItCd0Y3QstGC0YDRjdGFIn1d",
+        "initialCallbackUrl": "https://rp.example.mn/cb"}},
+      "response": {"status": 200, "body": {"sessionID": "0b8f3f0e-1111-4222-8333-444455556666", "sessionToken": "tok_abc-123",
+        "sessionSecret": "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTMyYg==", "deviceLinkBase": "https://ca.eidmongolia.mn/dl",
+        "vc": "12345", "expiresAt": "2026-10-14T14:10:00Z"}},
+      "expect": {"sessionId": "0b8f3f0e-1111-4222-8333-444455556666", "vc": "12345", "sessionType": "auth",
+        "acsp.flowTypes": ["QR", "App2App", "Web2App"], "expiresAt": "2026-10-14T14:10:00Z"}
+    },
+    {
+      "name": "sign-text-etsi-onbehalf",
+      "source": "Go client_test.go TestSign_Body + sign_gaps_test.go TestSignExpiresAt",
+      "op": "sign.textByEtsi",
+      "input": {"id": "PNOMN-1", "text": "x", "options": {"onBehalfOf": "NTRMN-6235972"}},
+      "request": {"method": "POST", "path": "/signature/notification/etsi/PNOMN-1", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "LXEWQrcmsEQBYnyp+6wy9chTD7GQPMTbAiWHF5IaSIE=", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10=", "onBehalfOf": "NTRMN-6235972"}},
+      "response": {"status": 200, "body": {"sessionID": "s1", "vc": {"type": "alphaNumeric5", "value": "90177"}}},
+      "expect": {"sessionId": "s1", "vc": "90177", "rpChallenge": "", "acsp": null, "expiresAt": "2026-10-14T12:10:00Z",
+        "sign.digest": "LXEWQrcmsEQBYnyp+6wy9chTD7GQPMTbAiWHF5IaSIE=", "sign.signatureAlgorithm": "rsassa-pss",
+        "sign.hashAlgorithm": "SHA-256", "sign.interactions": "W10="}
+    },
+    {
+      "name": "sign-device-link-etsi-callback-filename",
+      "source": "Go sign_gaps_test.go TestSignDeviceLink",
+      "op": "sign.deviceLinkByEtsi",
+      "input": {"id": "PNOMN-12345678", "digest": "qIaPUB5hGAdwX8V4Nxpe0W0en0+KRdmACAzIHNO5EtQ=",
+        "interactions": [{"type": "displayTextAndPIN", "displayText60": "Гэрээнд гарын үсэг зурах"}],
+        "options": {"callbackUrl": " https://rp.example.mn/cb ", "fileName": "Гэрээ.pdf", "onBehalfOf": "NTRMN-6235972",
+          "signatureAlgorithm": "sha256WithRSAEncryption"}},
+      "request": {"method": "POST", "path": "/signature/device-link/etsi/PNOMN-12345678", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "qIaPUB5hGAdwX8V4Nxpe0W0en0+KRdmACAzIHNO5EtQ=",
+          "signatureAlgorithm": "sha256WithRSAEncryption", "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W3sidHlwZSI6ImRpc3BsYXlUZXh0QW5kUElOIiwiZGlzcGxheVRleHQ2MCI6ItCT0Y3RgNGN0Y3QvdC0INCz0LDRgNGL0L0g0q/RgdGN0LMg0LfRg9GA0LDRhSJ9XQ==",
+        "initialCallbackUrl": "https://rp.example.mn/cb", "onBehalfOf": "NTRMN-6235972", "fileName": "Гэрээ.pdf"}},
+      "response": {"status": 200, "body": {"sessionID": "0b8f3f0e-1111-4222-8333-444455556666", "sessionToken": "tok_abc-123",
+        "sessionSecret": "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTMyYg==", "deviceLinkBase": "https://ca.eidmongolia.mn/dl", "vc": "12345"}},
+      "expect": {"sessionToken": "tok_abc-123", "vc": "12345", "sessionType": "sign", "rpChallenge": "",
+        "sign.digest": "qIaPUB5hGAdwX8V4Nxpe0W0en0+KRdmACAzIHNO5EtQ=", "sign.relyingPartyName": "Гэрээний систем",
+        "sign.initialCallbackUrl": "https://rp.example.mn/cb", "sign.signatureAlgorithm": "sha256WithRSAEncryption",
+        "expiresAt": "2026-10-14T12:10:00Z"}
+    },
+    {
+      "name": "sign-device-link-document-defaults",
+      "source": "Go sign_gaps_test.go TestSignDeviceLink (DeviceLinkByDocument)",
+      "op": "sign.deviceLinkByDocument",
+      "input": {"documentNumber": "PNOMN-12345678-MOCK-Q", "digest": "qIaPUB5hGAdwX8V4Nxpe0W0en0+KRdmACAzIHNO5EtQ=",
+        "interactions": [{"type": "displayTextAndPIN", "displayText60": "Гэрээнд гарын үсэг зурах"}]},
+      "request": {"method": "POST", "path": "/signature/device-link/document/PNOMN-12345678-MOCK-Q", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "qIaPUB5hGAdwX8V4Nxpe0W0en0+KRdmACAzIHNO5EtQ=",
+          "signatureAlgorithm": "rsassa-pss", "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W3sidHlwZSI6ImRpc3BsYXlUZXh0QW5kUElOIiwiZGlzcGxheVRleHQ2MCI6ItCT0Y3RgNGN0Y3QvdC0INCz0LDRgNGL0L0g0q/RgdGN0LMg0LfRg9GA0LDRhSJ9XQ=="}},
+      "response": {"status": 200, "body": {"sessionID": "s5", "sessionToken": "tok_abc-123",
+        "sessionSecret": "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTMyYg==", "deviceLinkBase": "https://ca.eidmongolia.mn/dl", "vc": "12345",
+        "expiresAt": "2026-10-14T14:10:00Z"}},
+      "expect": {"sessionId": "s5", "sessionType": "sign", "sign.initialCallbackUrl": "", "expiresAt": "2026-10-14T14:10:00Z"}
+    },
+    {
+      "name": "sign-digest-document-filename-trimmed",
+      "source": "Go portal_gaps_test.go TestSignFileName",
+      "op": "sign.digestByDocument",
+      "input": {"documentNumber": "DOC-1", "digest": "LXEWQrcmsEQBYnyp+6wy9chTD7GQPMTbAiWHF5IaSIE=",
+        "options": {"fileName": " Гэрээ.pdf ", "certificateLevel": "ADVANCED", "hashAlgorithm": "SHA-256"}},
+      "request": {"method": "POST", "path": "/signature/notification/document/DOC-1", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "ADVANCED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "LXEWQrcmsEQBYnyp+6wy9chTD7GQPMTbAiWHF5IaSIE=", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10=", "fileName": "Гэрээ.pdf"}},
+      "response": {"status": 200, "body": {"sessionID": "s1", "vc": {"type": "alphaNumeric5", "value": "12345"}}},
+      "expect": {"sessionId": "s1", "vc": "12345"}
+    },
+    {
+      "name": "sign-digest-for-signer-linked",
+      "source": "Go sign_gaps_test.go TestDigestForSigner",
+      "op": "sign.digestForSigner",
+      "input": {"signer": {"documentNumber": "PNOMN-12345678-ABCD-Q", "certChoiceSessionId": "cc-1"},
+        "digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A=", "options": {"fileName": "a.pdf"}},
+      "request": {"method": "POST", "path": "/signature/notification/linked/PNOMN-12345678-ABCD-Q", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A=",
+          "signatureAlgorithm": "sha256WithRSAEncryption", "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10=", "fileName": "a.pdf", "linkedSessionID": "cc-1"}},
+      "response": {"status": 200, "body": {"sessionID": "s-2", "vc": {"type": "alphaNumeric5", "value": "22222"}}},
+      "expect": {"sessionId": "s-2", "vc": "22222", "sign.signatureAlgorithm": "sha256WithRSAEncryption", "sign.hashAlgorithm": "SHA-256"}
+    },
+    {
+      "name": "sign-digest-for-signer-document",
+      "source": "Go sign_gaps_test.go TestDigestForSigner (no certChoiceSessionID)",
+      "op": "sign.digestForSigner",
+      "input": {"signer": {"documentNumber": "DOC-1"}, "digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A="},
+      "request": {"method": "POST", "path": "/signature/notification/document/DOC-1", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A=",
+          "signatureAlgorithm": "sha256WithRSAEncryption", "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10="}},
+      "response": {"status": 200, "body": {"sessionID": "s-3", "vc": {"type": "alphaNumeric5", "value": "22222"}}},
+      "expect": {"sessionId": "s-3"}
+    },
+    {
+      "name": "sign-device-link-for-signer",
+      "source": "Go sign_gaps_test.go TestDigestForSigner (DeviceLinkForSigner)",
+      "op": "sign.deviceLinkForSigner",
+      "input": {"signer": {"documentNumber": "PNOMN-12345678-ABCD-Q", "certChoiceSessionId": "cc-1"},
+        "digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A=", "options": {"callbackUrl": "https://rp.example.mn/cb"}},
+      "request": {"method": "POST", "path": "/signature/device-link/document/PNOMN-12345678-ABCD-Q", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A=",
+          "signatureAlgorithm": "sha256WithRSAEncryption", "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10=", "initialCallbackUrl": "https://rp.example.mn/cb"}},
+      "response": {"status": 200, "body": {"sessionID": "0b8f3f0e-1111-4222-8333-444455556666", "sessionToken": "tok_abc-123",
+        "sessionSecret": "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTMyYg==", "deviceLinkBase": "https://ca.eidmongolia.mn/dl", "vc": "12345"}},
+      "expect": {"sessionType": "sign", "sign.signatureAlgorithm": "sha256WithRSAEncryption"}
+    },
+    {
+      "name": "cert-choice-etsi-no-callback",
+      "source": "Go sign_gaps_test.go TestCertificateChoice + certchoice_callback_test.go TestCertificateChoiceByEtsi_NoCallback",
+      "op": "sign.certificateChoiceByEtsi",
+      "input": {"id": "PNOMN-12345678", "options": {"callbackUrl": "https://rp.example.mn/cb"}},
+      "request": {"method": "POST", "path": "/signature/certificate-choice/notification/etsi/PNOMN-12345678", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED"}},
+      "response": {"status": 200, "body": {"sessionID": "cc-1", "vc": {"type": "alphaNumeric5", "value": "11111"}}},
+      "expect": {"sessionId": "cc-1", "vc": "11111", "sign": null, "acsp": null, "expiresAt": "2026-10-14T12:10:00Z"}
+    },
+    {
+      "name": "cert-choice-device-link-callback",
+      "source": "Go certchoice_callback_test.go TestCertificateChoiceDeviceLink_Callback + sign_gaps_test.go TestCertificateChoice",
+      "op": "sign.certificateChoiceDeviceLink",
+      "input": {"options": {"certificateLevel": "QSCD", "callbackUrl": " https://rp.example.mn/auth/eid/callback?value=abc "}},
+      "request": {"method": "POST", "path": "/signature/certificate-choice/device-link/anonymous", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QSCD",
+        "initialCallbackUrl": "https://rp.example.mn/auth/eid/callback?value=abc"}},
+      "response": {"status": 200, "body": {"sessionID": "0b8f3f0e-1111-4222-8333-444455556666", "sessionToken": "tok_abc-123",
+        "sessionSecret": "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTMyYg==", "deviceLinkBase": "https://ca.eidmongolia.mn/dl", "vc": "12345"}},
+      "expect": {"sessionType": "cert", "relyingPartyName": "Гэрээний систем",
+        "callbackUrl": "https://rp.example.mn/auth/eid/callback?value=abc", "expiresAt": "2026-10-14T12:10:00Z"}
+    },
+    {
+      "name": "cert-choice-device-link-no-callback",
+      "source": "Go certchoice_callback_test.go TestCertificateChoiceDeviceLink_Callback (without callback)",
+      "op": "sign.certificateChoiceDeviceLink",
+      "input": {},
+      "request": {"method": "POST", "path": "/signature/certificate-choice/device-link/anonymous", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED"}},
+      "response": {"status": 200, "body": {"sessionID": "s", "sessionToken": "tok_abc-123",
+        "sessionSecret": "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTMyYg==", "deviceLinkBase": "https://ca.eidmongolia.mn/dl", "vc": "12345"}},
+      "expect": {"sessionType": "cert", "callbackUrl": ""}
+    },
+    {
+      "name": "error-no-signing-certificate",
+      "source": "Go session_start_test.go TestSessionStartTypedErrors",
+      "op": "sign.digestByEtsi",
+      "input": {"id": "PNOMN-1", "digest": "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="},
+      "request": {"method": "POST", "path": "/signature/notification/etsi/PNOMN-1", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10="}},
+      "response": {"status": 409, "body": {"error": "x", "code": "NO_SIGNING_CERTIFICATE"}},
+      "expect": {"error.class": "NoSigningCertificate", "error.code": "NO_SIGNING_CERTIFICATE", "error.status": 409}
+    },
+    {
+      "name": "error-cert-choice-invalid",
+      "source": "Go session_start_test.go TestSessionStartTypedErrors",
+      "op": "sign.digestForSigner",
+      "input": {"signer": {"documentNumber": "DOC-1", "certChoiceSessionId": "cc-1"}, "digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A="},
+      "request": {"method": "POST", "path": "/signature/notification/linked/DOC-1", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "RAW_DIGEST_SIGNATURE",
+        "signatureProtocolParameters": {"digest": "y23jGdI+GmyxuOo7trZ6ueuqNM+Uq6jlf/3j8foag0A=",
+          "signatureAlgorithm": "sha256WithRSAEncryption", "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-256"}},
+        "interactions": "W10=", "linkedSessionID": "cc-1"}},
+      "response": {"status": 409, "body": {"error": "x", "code": "CERT_CHOICE_INVALID"}},
+      "expect": {"error.class": "CertChoiceInvalid", "error.code": "CERT_CHOICE_INVALID", "error.status": 409}
+    },
+    {
+      "name": "error-request-invalid",
+      "source": "Go session_start_test.go TestSessionStartTypedErrors",
+      "op": "sign.certificateChoiceByEtsi",
+      "input": {"id": "PNOMN-1"},
+      "request": {"method": "POST", "path": "/signature/certificate-choice/notification/etsi/PNOMN-1", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED"}},
+      "response": {"status": 400, "body": {"error": "x", "code": "REQUEST_INVALID"}},
+      "expect": {"error.class": "RequestInvalid", "error.code": "REQUEST_INVALID", "error.status": 400}
+    },
+    {
+      "name": "error-onbehalf-forbidden",
+      "source": "Go auth.go AuthOptions.OnBehalfOf (403 ForbiddenError.Code)",
+      "op": "auth.notificationByEtsi",
+      "input": {"id": "PNOMN-1", "options": {"onBehalfOf": "NTRMN-1"}},
+      "request": {"method": "POST", "path": "/authentication/notification/etsi/PNOMN-1", "body": {
+        "relyingPartyUUID": "rp-uuid", "relyingPartyName": "Гэрээний систем", "certificateLevel": "QUALIFIED",
+        "signatureProtocol": "ACSP_V2",
+        "signatureProtocolParameters": {"rpChallenge": "<any>", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-512"}},
+        "interactions": "W10=", "onBehalfOf": "NTRMN-1"}},
+      "response": {"status": 403, "body": {"error": "x", "code": "REPRESENTATION_DENIED"}},
+      "expect": {"error.class": "Forbidden", "error.code": "REPRESENTATION_DENIED", "error.status": 403}
+    },
+    {
+      "name": "session-poll-acsp-result",
+      "source": "Go client_test.go TestParseSessionResult + TestSession_PollAndWait (path escaping, timeoutMs)",
+      "op": "session.poll",
+      "input": {"sessionId": "abc/def", "serverPollMs": 2000},
+      "request": {"method": "GET", "path": "/session/abc%2Fdef", "query": "timeoutMs=2000", "body": null},
+      "response": {"status": 200, "body": {"state": "COMPLETE", "result": {"endResult": "OK", "documentNumber": "AB1234567"},
+        "signatureProtocol": "ACSP_V2",
+        "signature": {"value": "c2ln", "serverRandom": "+wVP2U/SMKVkVrggDjNTXFV/", "userChallenge": "TLSjYRH2oYw8tW2bq0it0IUb7WIFkCLgF8NTc7-4Zq4",
+          "flowType": "Notification", "signatureAlgorithm": "rsassa-pss",
+          "signatureAlgorithmParameters": {"hashAlgorithm": "SHA-512", "maskGenAlgorithm": {"algorithm": "id-mgf1",
+            "parameters": {"hashAlgorithm": "SHA-512"}}, "saltLength": 64, "trailerField": "0xbc"}},
+        "cert": {"value": "Y2VydA==", "certificateLevel": "QUALIFIED"}}},
+      "expect": {"state": "COMPLETE", "endResult": "OK", "documentNumber": "AB1234567", "signatureProtocol": "ACSP_V2",
+        "serverRandom": "+wVP2U/SMKVkVrggDjNTXFV/", "userChallenge": "TLSjYRH2oYw8tW2bq0it0IUb7WIFkCLgF8NTc7-4Zq4",
+        "flowType": "Notification", "signatureValueB64": "c2ln", "certificateDerB64": "Y2VydA==", "certificateLevel": "QUALIFIED",
+        "signatureAlgorithm": "rsassa-pss", "signatureAlgorithmParameters.hashAlgorithm": "SHA-512",
+        "signatureAlgorithmParameters.maskGenAlgorithm": "id-mgf1", "signatureAlgorithmParameters.maskGenHashAlgorithm": "SHA-512",
+        "signatureAlgorithmParameters.saltLength": 64, "signatureAlgorithmParameters.trailerField": "0xbc",
+        "onBehalfOf": null, "person": null, "initialCallbackUrl": null}
+    },
+    {
+      "name": "session-poll-person-token",
+      "source": "Go portal_gaps_test.go TestSessionPersonRawToken",
+      "op": "session.poll",
+      "input": {"sessionId": "s1", "serverPollMs": 1000},
+      "request": {"method": "GET", "path": "/session/s1", "query": "timeoutMs=1000", "body": null},
+      "response": {"status": 200, "body": {"state": "COMPLETE", "result": {"endResult": "OK", "documentNumber": "d1"},
+        "person": {"firstName": "Бат", "lastName": "Дорж", "familyName": "Боржигон", "firstNameEn": "BAT", "lastNameEn": "DORJ",
+          "civilId": "12345678", "regNo": "УБ99112233", "birthDate": "1999-11-22", "gender": "M", "geID": 42},
+        "tokenCertificate": {"status": "ISSUED", "authSerialHex": "3F9A", "signSerialHex": "7C01"}, "futureField": 1}},
+      "expect": {"person.firstName": "Бат", "person.lastName": "Дорж", "person.familyName": "Боржигон", "person.civilId": "12345678",
+        "person.regNo": "УБ99112233", "person.birthDate": "1999-11-22", "person.gender": "M", "person.geId": 42,
+        "person.nationality": "", "tokenCertificate.status": "ISSUED", "tokenCertificate.signSerialHex": "7C01",
+        "tokenCertificate.errorCode": ""}
+    },
+    {
+      "name": "pdf-register-phone-created",
+      "source": "Go pdfregister_test.go TestRegisterSignature",
+      "op": "pdf.registerSignature",
+      "input": {"registration": {"docID": "d", "revIndex": 1, "medium": "phone", "sessionID": "s", "cms": "MAE=", "fileName": "a.pdf",
+        "inSha256": "in", "pageSha256": "pg", "sigRevSha256": "sr", "outSha256": "out", "signerEtsi": "PNOMN-1"}},
+      "request": {"method": "POST", "path": "/pdf/signatures", "body": {"docID": "d", "revIndex": 1, "medium": "phone",
+        "sessionID": "s", "cms": "MAE=", "fileName": "a.pdf", "inSha256": "in", "pageSha256": "pg", "sigRevSha256": "sr",
+        "outSha256": "out", "signerEtsi": "PNOMN-1"}},
+      "response": {"status": 201, "body": {"docID": "d", "revIndex": 1, "registeredAt": "2026-10-14T12:00:00+08:00",
+        "verifyUrl": "https://ca.eidmongolia.mn/verify/d"}},
+      "expect": {"docId": "d", "revIndex": 1, "registeredAt": "2026-10-14T12:00:00+08:00",
+        "verifyUrl": "https://ca.eidmongolia.mn/verify/d", "created": true}
+    },
+    {
+      "name": "pdf-register-token-replay",
+      "source": "Go pdfregister_test.go TestRegisterSignatureReplayAndPriorMismatch (200 replay)",
+      "op": "pdf.registerSignature",
+      "input": {"registration": {"docID": "d", "revIndex": 1, "medium": "token", "cms": "MAE=", "fileName": "a.pdf",
+        "inSha256": "in", "pageSha256": "pg", "sigRevSha256": "sr", "outSha256": "out"}},
+      "request": {"method": "POST", "path": "/pdf/signatures", "body": {"docID": "d", "revIndex": 1, "medium": "token",
+        "cms": "MAE=", "fileName": "a.pdf", "inSha256": "in", "pageSha256": "pg", "sigRevSha256": "sr", "outSha256": "out"}},
+      "response": {"status": 200, "body": {"docID": "d", "revIndex": 1, "registeredAt": "x", "verifyUrl": "v"}},
+      "expect": {"created": false, "verifyUrl": "v"}
+    },
+    {
+      "name": "pdf-register-signer-mismatch",
+      "source": "Go pdfregister_test.go TestRegisterSignature (CA error → APIError.Code)",
+      "op": "pdf.registerSignature",
+      "input": {"registration": {"docID": "d", "revIndex": 2, "medium": "token", "cms": "MAE=", "fileName": "a.pdf",
+        "inSha256": "in", "sigRevSha256": "sr", "outSha256": "out", "priorCmsSha256": ["c1"]}},
+      "request": {"method": "POST", "path": "/pdf/signatures", "body": {"docID": "d", "revIndex": 2, "medium": "token",
+        "cms": "MAE=", "fileName": "a.pdf", "inSha256": "in", "sigRevSha256": "sr", "outSha256": "out", "priorCmsSha256": ["c1"]}},
+      "response": {"status": 409, "body": {"error": "x", "code": "SIGNER_MISMATCH"}},
+      "expect": {"error.class": "Api", "error.code": "SIGNER_MISMATCH", "error.status": 409}
+    }
+  ]
+}

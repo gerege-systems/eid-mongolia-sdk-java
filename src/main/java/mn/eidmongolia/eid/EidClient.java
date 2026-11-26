@@ -4,6 +4,7 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
@@ -26,8 +27,8 @@ import java.util.regex.Pattern;
  * <p>Calls are blocking (fine on virtual threads); {@link Thread#interrupt()} cancels a call in flight
  * ({@link EidException.Network#cancelled()}). Thread-safe — share one instance.
  *
- * <p>In progress: this release has the transport, configuration, errors, routes, wire types, discovery and the
- * crypto helpers ({@link Acsp}, {@link DeviceLink}, {@link EidCrypto}); the auth / sign / session / validator services
+ * <p>Services: {@link #auth()}, {@link #sign()} (incl. certificate choice), {@link #session()}, {@link #pdf()}; crypto
+ * helpers {@link Acsp}, {@link DeviceLink}, {@link EidCrypto}. In progress: the validator and the remaining services
  * follow.
  */
 public final class EidClient {
@@ -52,6 +53,9 @@ public final class EidClient {
     private final Duration pdfTimeout;
     private final Duration signSessionTtl;
     private final AuthService auth;
+    private final SignService sign;
+    private final SessionService session;
+    private final PdfService pdf;
 
     private EidClient(Builder b) {
         if (b.credentials.apiSecret().isEmpty()) throw new IllegalArgumentException("eid: Credentials.apiSecret шаардлагатай");
@@ -63,7 +67,11 @@ public final class EidClient {
         this.signSessionTtl = positiveOr(b.signSessionTtl, DEFAULT_SIGN_SESSION_TTL);
         EidTransport tr = b.transport == null ? JdkHttpTransport.create() : b.transport;
         this.http = new RpHttp(base, b.credentials.apiSecret(), t, tr, b.language == null ? "" : b.language.trim());
-        this.auth = new AuthService(http);
+        Clock clock = b.clock == null ? Clock.systemUTC() : b.clock;
+        this.auth = new AuthService(http, credentials, defaultCertificateLevel, clock);
+        this.sign = new SignService(http, credentials, defaultCertificateLevel, signSessionTtl, clock);
+        this.session = new SessionService(http, clock);
+        this.pdf = new PdfService(http, pdfTimeout);
     }
 
     private static Duration positiveOr(Duration d, Duration def) {
@@ -74,9 +82,24 @@ public final class EidClient {
         return new Builder(credentials);
     }
 
-    /** Authentication (discovery sessionTtl in this release). */
+    /** Authentication: push and device link (PIN1), discovery sessionTtl. */
     public AuthService auth() {
         return auth;
+    }
+
+    /** Signing (PIN2) and certificate choice. */
+    public SignService sign() {
+        return sign;
+    }
+
+    /** Session polling: poll, waitForResult. */
+    public SessionService session() {
+        return session;
+    }
+
+    /** PDF signature registration (POST /pdf/signatures). */
+    public PdfService pdf() {
+        return pdf;
     }
 
     /** Credentials.rpName — the RP name shown on the citizen's phone. */
@@ -208,6 +231,7 @@ public final class EidClient {
         private Duration signSessionTtl;
         private String language;
         private EidTransport transport;
+        private Clock clock;
 
         private Builder(Credentials credentials) {
             this.credentials = Objects.requireNonNull(credentials, "credentials");
@@ -252,6 +276,12 @@ public final class EidClient {
         /** The HTTP transport (mTLS: {@code JdkHttpTransport.create(sslContext)}). null = {@link JdkHttpTransport#create()}. */
         public Builder transport(EidTransport v) {
             transport = v;
+            return this;
+        }
+
+        /** The clock for receivedAt, computed expiry and waitForResult deadlines (tests). null = the system clock. */
+        Builder clock(Clock v) {
+            clock = v;
             return this;
         }
 
