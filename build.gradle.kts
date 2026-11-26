@@ -7,8 +7,8 @@ plugins {
 }
 
 group = "com.github.gerege-systems"
-// JitPack sets VERSION to the git tag; the release workflow does the same.
-version = System.getenv("VERSION") ?: "0.0.0-SNAPSHOT"
+// JitPack sets VERSION to the git tag; the release workflow does the same. Without it: the version being prepared.
+version = System.getenv("VERSION") ?: "0.2.0"
 
 java {
     withSourcesJar()
@@ -62,7 +62,7 @@ publishing {
             from(components["java"])
             pom {
                 name.set("eID Mongolia PAdES SDK (Java)")
-                description.set("Client-side PAdES signing for eID Mongolia (pades-client/1) and «My QR» verification")
+                description.set("eID Mongolia relying-party SDK: RP-API client, response validator, sign-in backend, client-side PAdES (pades-client/1) and «My QR» verification")
                 url.set("https://github.com/gerege-systems/eid-mongolia-sdk-java")
                 licenses { license { name.set("MIT"); url.set("https://opensource.org/licenses/MIT") } }
             }
