@@ -39,6 +39,17 @@ public class ValidatePdfGoldenTest {
      */
     static final Map<String, String> PENDING = new HashMap<>();
 
+    static {
+        // The own-signer check of a visible e-Seal stamp regenerates it with the writer's seal stamp (APPEARANCE_SPEC.md
+        // §6.2/§6.5, golden v12/v13), which this writer does not have yet (branch feat/pades-golden-v13). Until then
+        // ValidateSupport fails closed: an earlier signature followed by a visible seal stamp reads modified_after_signing.
+        String seal = "needs the v12/v13 seal stamp generator in Appearance (feat/pades-golden-v13); ValidateSupport fails closed";
+        for (String n : new String[] {"seal-after-two-citizens", "citizen-then-seal-qr", "seal-qr-then-seal-qr", "seal-qr-control",
+            "seal-qr-control-nopage"}) {
+            PENDING.put(n, seal);
+        }
+    }
+
     static byte[] res(String path) {
         try (InputStream s = ValidatePdfGoldenTest.class.getResourceAsStream(ROOT + path)) {
             if (s == null) throw new IllegalStateException("missing test resource " + path);

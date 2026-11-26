@@ -3,7 +3,7 @@
 # pades/testdata/validate, "pades-validate/1") byte-identically into src/test/resources/pades-validate, laid out like
 # Go's pades/testdata so the manifest's relative paths resolve:
 #   validate/{manifest.json,README.md,input/,http/,pki/*.pem}   (private keys *.key.pem excluded)
-#   golden/output/<only the PDFs the manifest references>
+#   golden/{output,input}/<only the PDFs the manifest references>
 #   golden/pki/*.pem                                            (private keys excluded)
 #
 #   scripts/sync-pades-validate.sh <commit>   # fetch from that Go commit and write
@@ -21,7 +21,7 @@ fetch() { # $1 = ref → $2 = dir
   tmp=$(mktemp -d)
   curl -fsSL "https://codeload.github.com/$GO_REPO/tar.gz/$ref" | tar -xz -C "$tmp" --strip-components=1
   local td=$tmp/pades/testdata
-  mkdir -p "$out/validate/input" "$out/validate/http" "$out/validate/pki" "$out/golden/output" "$out/golden/pki"
+  mkdir -p "$out/validate/input" "$out/validate/http" "$out/validate/pki" "$out/golden/output" "$out/golden/input" "$out/golden/pki"
   cp "$td/validate/manifest.json" "$td/validate/README.md" "$out/validate/"
   cp "$td"/validate/input/* "$out/validate/input/"
   cp "$td"/validate/http/* "$out/validate/http/"
@@ -29,7 +29,7 @@ fetch() { # $1 = ref → $2 = dir
     case "$f" in *.key.pem) continue ;; esac
     case "$f" in */validate/pki/*) cp "$f" "$out/validate/pki/" ;; *) cp "$f" "$out/golden/pki/" ;; esac
   done
-  for f in $(grep -o '"golden/output/[^"]*"' "$td/validate/manifest.json" | tr -d '"' | sort -u); do
+  for f in $(grep -oE '"golden/(output|input)/[^"]*"' "$td/validate/manifest.json" | tr -d '"' | sort -u); do
     cp "$td/$f" "$out/$f"
   done
   rm -rf "$tmp"

@@ -1,3 +1,5 @@
+5f8afb701651cddfdf1bb0dceb9fa242eec3fc795f576baa6612fe181cbdd563  golden/input/quartz-pdf13.pdf
+ba1fac85c1920b313833cda2155e6c287410c4309df707a8fdc753058b45d4b6  golden/input/stamped.pdf
 cf3714359094ff011f73952a51d669cc688018c7b1df6b7d91511ca16bf97c61  golden/output/citizen-then-seal-qr.pdf
 bcdb972bdcb03408e4d1d39197eb4813a5827e3d009a94d5fb47b2ef533ec1aa  golden/output/desktop-objstm-nopage.pdf
 22f46803dde79b8eaabd491818c32b9d64110601f54e653827471407bd25e584  golden/output/quartz-linearized.pdf

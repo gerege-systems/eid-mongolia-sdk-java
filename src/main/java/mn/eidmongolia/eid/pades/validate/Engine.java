@@ -34,63 +34,68 @@ public final class Engine {
         List<Cert> out = new ArrayList<>();
         for (byte[] d : list) {
             try {
-                out.add(Cert.parse(d));
-            } catch (RuntimeException e) {
-                throw new ValidatePdfException(ValidatePdfException.REQUEST_INVALID, what + ": certificate does not parse");
+                    out.add(Cert.parse(d));
+                } catch (RuntimeException e) {
+                    throw new ValidatePdfException(ValidatePdfException.REQUEST_INVALID, what + ": certificate does not parse");
+                }
             }
+            return out;
         }
-        return out;
-    }
-
-    /** INTERNAL entry point (see the class comment). */
-    public static PdfReport run(byte[] pdf, ValidatePdfOptions opts, PadesSupport support, EidPadesTransport defaultTransport) {
-        if (pdf.length > Extract.MAX_PDF_BYTES) throw new ValidatePdfException(ValidatePdfException.PDF_TOO_LARGE, "PDF larger than 10 MiB");
-        List<Cert> roots = opts.roots.isEmpty() ? List.of(embedded(CHAIN[0])) : ders(opts.roots, "roots");
-        List<Cert> inter = new ArrayList<>();
-        for (int i = 1; i < CHAIN.length; i++) inter.add(embedded(CHAIN[i]));
-        inter.addAll(ders(opts.intermediates, "intermediates"));
-        List<Cert> issuers = new ArrayList<>(List.of(embedded(CHAIN[3]), embedded(CHAIN[4])));
-        issuers.addAll(ders(opts.issuers, "issuers"));
-        Extract.Extracted ex;
-        try {
-            ex = Extract.extract(pdf, support);
-        } catch (Extract.Failure e) {
-            switch (e.code) {
-                case "no_signature":
-                    throw new ValidatePdfException(ValidatePdfException.PDF_NO_SIGNATURE, "the document has no signature");
-                case "too_many":
-                    throw new ValidatePdfException(ValidatePdfException.PDF_TOO_MANY_SIGNATURES, "the document has too many signatures");
-                case "encrypted":
-                    throw new ValidatePdfException(ValidatePdfException.PDF_ENCRYPTED, "an encrypted PDF cannot be validated");
-                default:
-                    throw new ValidatePdfException(ValidatePdfException.PDF_INVALID, "the PDF does not parse");
+    
+        /** INTERNAL entry point (see the class comment). */
+        public static PdfReport run(byte[] pdf, ValidatePdfOptions opts, PadesSupport support, EidPadesTransport defaultTransport) {
+            if (pdf.length > Extract.MAX_PDF_BYTES) throw new ValidatePdfException(ValidatePdfException.PDF_TOO_LARGE, "PDF larger than 10 MiB");
+            List<Cert> roots = opts.roots.isEmpty() ? List.of(embedded(CHAIN[0])) : ders(opts.roots, "roots");
+            List<Cert> inter = new ArrayList<>();
+            for (int i = 1; i < CHAIN.length; i++) inter.add(embedded(CHAIN[i]));
+            inter.addAll(ders(opts.intermediates, "intermediates"));
+            List<Cert> issuers = new ArrayList<>(List.of(embedded(CHAIN[3]), embedded(CHAIN[4])));
+            issuers.addAll(ders(opts.issuers, "issuers"));
+            Extract.Extracted ex;
+            try {
+                ex = Extract.extract(pdf, support);
+            } catch (Extract.Failure e) {
+                switch (e.code) {
+                    case "no_signature":
+                        throw new ValidatePdfException(ValidatePdfException.PDF_NO_SIGNATURE, "the document has no signature");
+                    case "too_many":
+                        throw new ValidatePdfException(ValidatePdfException.PDF_TOO_MANY_SIGNATURES, "the document has too many signatures");
+                    case "encrypted":
+                        throw new ValidatePdfException(ValidatePdfException.PDF_ENCRYPTED, "an encrypted PDF cannot be validated");
+                    default:
+                        throw new ValidatePdfException(ValidatePdfException.PDF_INVALID, "the PDF does not parse");
+                }
+            } catch (RuntimeException | StackOverflowError e) {
+                throw new ValidatePdfException(ValidatePdfException.PDF_INVALID, "the PDF does not parse");
+            }
+            Instant now = opts.time != null ? opts.time : Instant.now();
+            Extract.RawDss dss = null;
+            for (Extract.RawSignature s : ex.sigs) {
+                if (s.dss != null) {
+                    dss = s.dss;
+                    break;
+                }
+            }
+            Evaluate.StatusSource status = new Evaluate.DssStatus(dss, now);
+            if (!opts.offline) {
+                EidPadesTransport t = opts.transport != null ? opts.transport : defaultTransport;
+                status = new Evaluate.OnlineStatus(new Fetch(t), status, now);
+            }
+            Evaluate.Evaluator ev = new Evaluate.Evaluator(roots, inter, issuers, status, now);
+            PdfReport rep = new PdfReport();
+            try {
+            for (Extract.RawSignature r : ex.sigs) {
+                PdfReport.SignatureReport s = ev.evaluateSignature(r);
+                if (s.chainTrusted && r.leaf != null) {
+                    String lvl = Evaluate.signLevelOf(Cert.parse(r.leaf));
+                    if (lvl != null) s.certificateLevel = lvl;
+                }
+                s.keyMedium = keyMedium(s);
+                rep.signatures.add(s);
             }
         } catch (RuntimeException | StackOverflowError e) {
+            // Defence in depth: evaluation never escapes untyped (no case of the corpus reaches here).
             throw new ValidatePdfException(ValidatePdfException.PDF_INVALID, "the PDF does not parse");
-        }
-        Instant now = opts.time != null ? opts.time : Instant.now();
-        Extract.RawDss dss = null;
-        for (Extract.RawSignature s : ex.sigs) {
-            if (s.dss != null) {
-                dss = s.dss;
-                break;
-            }
-        }
-        Evaluate.StatusSource status = new Evaluate.DssStatus(dss, now);
-        if (!opts.offline) {
-            EidPadesTransport t = opts.transport != null ? opts.transport : defaultTransport;
-            status = new Evaluate.OnlineStatus(new Fetch(t), status, now);
-        }
-        Evaluate.Evaluator ev = new Evaluate.Evaluator(roots, inter, issuers, status, now);
-        PdfReport rep = new PdfReport();
-        for (Extract.RawSignature r : ex.sigs) {
-            PdfReport.SignatureReport s = ev.evaluateSignature(r);
-            if (s.chainTrusted && r.leaf != null) {
-                String lvl = Evaluate.signLevelOf(Cert.parse(r.leaf));
-                if (lvl != null) s.certificateLevel = lvl;
-            }
-            s.keyMedium = keyMedium(s);
-            rep.signatures.add(s);
         }
         for (PdfReport.SignatureReport s : rep.signatures) {
             if (s.indication.equals("invalid")) {
