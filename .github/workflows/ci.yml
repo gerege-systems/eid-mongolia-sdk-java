@@ -49,6 +49,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/sync-pades-golden.sh --check
 
+  validate-sync:
+    # The vendored ValidatePDF corpus = the Go repo commit in pades-validate/SOURCE (byte for byte, private keys excluded).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/sync-pades-validate.sh --check
+
   conformance-sync:
     # The vendored RP conformance corpus = the Go repo commit in conformance/SOURCE (byte for byte, pki/keys excluded).
     runs-on: ubuntu-latest

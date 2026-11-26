@@ -17,8 +17,7 @@ Full documentation: <https://developer.eidmongolia.mn/#overview>.
 - **Full RP-API client** (`mn.eidmongolia.eid`, since 0.2.0): authentication, signing, sessions, the response validator
   with OCSP revocation, PDF signature registration, organisation / person / e-Seal / token / share, the «My QR» client
   and the «Sign in with eID» button backend — the same scope as the Go and TypeScript SDKs (support matrix below).
-- Not yet: verifying a signed PDF (ValidatePDF) — check it by the file's SHA-256 against the CA's registry, or use the
-  Go / TS SDK.
+- Validating a signed PDF (`EidPades.validatePdf`) — the same report as Go / TS (below).
 
 
 Other SDKs: [Go](https://github.com/gerege-systems/eid-mongolia-sdk-go) ·
@@ -350,6 +349,25 @@ the `POST /seal/{orgEtsi}/registrations` body (also for a QR-less seal); `regist
 `PRIOR_MISMATCH` splits like `pdf().registerSignature`, and maps the CA codes (`EidErrorCodes.SEAL_REGISTER`, typed
 `SealNotFound`, `SealDocMismatch`, `DocIdReserved`). Without `qr` the output is byte-identical to before.
 
+### Validating a signed PDF (`EidPades.validatePdf`)
+
+```java
+PdfReport r = EidPades.validatePdf(pdf, ValidatePdfOptions.DEFAULT);   // mn.eidmongolia.eid.pades.validate
+r.indication();                       // "valid" | "invalid" | "indeterminate"
+r.signatures().get(0).problems();     // ["revoked"], ["modified_after_signing"] …
+String json = r.toJson();             // the CA's /v3/validate/pdf JSON (same as the Go / TS SDKs)
+```
+
+A port of Go `pades.ValidatePDF` / TS `validatePdf`: ByteRange / messageDigest, the CMS signature (RSA PKCS#1 / ECDSA),
+signing-certificate-v2, the chain to the national root CA (fail-closed: certificates with nameConstraints or an unknown
+critical extension never join a chain; RSA ≥ 2048), KU/EKU, RFC 3161 timestamps, revisions after the signature (shadow /
+appended changes → `modified_after_signing`; visible stamps per APPEARANCE_SPEC §5), revocation (DSS OCSP/CRL; with
+`offline(false)` also AIA OCSP / CDP CRL), LTV, `PAdES-BASELINE-B/T/LT`, `certificate_level`. Options: `roots`,
+`intermediates`, `issuers`, `time`, `offline`, `transport` (`EidPadesTransport`). The document never leaves the process —
+only certificate serials (OCSP). Errors: `ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` /
+`PDF_ENCRYPTED` / `PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Bounded for hostile PDFs: 10 MiB, 16
+signatures, nesting / object / inflate / xref-chain limits.
+
 ### «Sign in with eID» button backend (`mn.eidmongolia.eid.login`)
 
 The backend of the browser `<eid-login-button>` (TS SDK) — the same JSON, cookie and status codes as Go `eidlogin` / TS `createEidLogin` (all 34 scenarios of the `eidlogin/2` conformance corpus). `EidLogin.handle(EidLoginRequest)` is framework neutral; `EidLoginHttpHandler` for the JDK server, the snippets below for Servlet / Spring. A push never reveals whether a number is registered (decoy, 1 s floor); the cookie is HttpOnly + Secure + SameSite=Lax; the state stays on the server (`EidLoginStore`, memory by default); OCSP revocation on by default (soft-fail — see above).
@@ -452,7 +470,7 @@ having none (status `EXPIRED`, callback `eid_error=expired`). Upgrading from 0.2
 | PAdES prepare / complete / suggestPlacement / registration body | ✓ |
 | `sealPdf` (visible seal stamp — default, invisible) | ✓ (golden v12) |
 | Seal stamp with QR (`SealOptions.qr`), docId rule for signed documents | ✓ golden v13 |
-| ValidatePDF (verify a signed PDF) | not yet |
+| ValidatePDF (verify a signed PDF) | ✓ |
 | Seal registration (`POST /seal/{orgEtsi}/registrations`, `sealForDocument`) | ✓ |
 
 ### Migrating from 0.1.x
@@ -479,6 +497,8 @@ having none (status `EXPIRED`, callback `eid_error=expired`). Upgrading from 0.2
   `golden/SOURCE` (now golden v13 = commit `499aa5c`, no tag; `scripts/sync-pades-golden.sh <tag|sha>`; the CI
   `golden-sync` job checks it with `--check`). The test PKI's private
   keys have been removed — the citizen's signature is ready in the manifest. `myqr_vectors.json` — the CA's contract vectors (sha256 pinned).
+- ValidatePDF corpus: `src/test/resources/pades-validate` = the Go repo's `pades/testdata/validate` (+ the `golden/output|input` files it
+  names), from the commit in `pades-validate/SOURCE` (`scripts/sync-pades-validate.sh <commit>`; CI `validate-sync` checks it with `--check`; a test checks `SHA256SUMS`).
 - Tests (`./gradlew build`, CI only): for every golden case, prepare → the manifest's signature → complete (HTTP fixture
   replay, fixed nonce/time) → the output PDF's sha256 is compared with Go's; placement vectors (every box), validate v4
   (revocation evidence, structural checks), error codes, "My QR" vectors.

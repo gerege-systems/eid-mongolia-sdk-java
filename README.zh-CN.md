@@ -17,7 +17,7 @@
 - **完整的 RP-API 客户端**（`mn.eidmongolia.eid`，自 0.2.0 起）：认证、签名、session、带 OCSP 吊销检查的响应验证器、
   PDF 签名登记、组织 / 个人 / e-Seal / 令牌 / 分享、“我的 QR”客户端以及“使用 eID 登录”按钮后端——范围与 Go 和
   TypeScript SDK 相同（见下文支持矩阵）。
-- 尚未支持：验证已签名的 PDF（ValidatePDF）——请通过文件的 SHA-256 在 CA 的登记中查询，或使用 Go / TS SDK。
+- 验证已签名的 PDF（`EidPades.validatePdf`）——与 Go / TS 相同的报告（见下文）。
 
 
 其他 SDK：[Go](https://github.com/gerege-systems/eid-mongolia-sdk-go) ·
@@ -342,6 +342,24 @@ PdfSignatureRegistered reg = eid.seal().registerSealedPdf("NTRMN-1234567", seale
 `PRIOR_MISMATCH` 时与 `pdf().registerSignature` 相同地重试各种组合，CA 错误码见 `EidErrorCodes.SEAL_REGISTER`（类型化的
 `SealNotFound`、`SealDocMismatch`、`DocIdReserved`）。不使用 `qr` 时输出与之前逐字节相同。
 
+### 验证已签名的 PDF（`EidPades.validatePdf`）
+
+```java
+PdfReport r = EidPades.validatePdf(pdf, ValidatePdfOptions.DEFAULT);   // mn.eidmongolia.eid.pades.validate
+r.indication();                       // "valid" | "invalid" | "indeterminate"
+r.signatures().get(0).problems();     // ["revoked"]、["modified_after_signing"] …
+String json = r.toJson();             // 与 CA 的 /v3/validate/pdf 相同的 JSON（与 Go / TS SDK 一致）
+```
+
+移植自 Go `pades.ValidatePDF` / TS `validatePdf`：ByteRange / messageDigest、CMS 签名（RSA PKCS#1 / ECDSA）、
+signing-certificate-v2、到国家根 CA 的证书链（fail-closed：带 nameConstraints 或未知关键扩展的证书不进入链；RSA ≥ 2048）、
+KU/EKU、RFC 3161 时间戳、签名之后的修订（shadow / 追加的修改 → `modified_after_signing`；可见印章按 APPEARANCE_SPEC §5）、
+吊销（DSS 中的 OCSP/CRL；`offline(false)` 时还有 AIA OCSP / CDP CRL）、LTV、`PAdES-BASELINE-B/T/LT`、`certificate_level`。
+选项：`roots`、`intermediates`、`issuers`、`time`、`offline`、`transport`（`EidPadesTransport`）。文档不会离开进程——网络上
+只有证书序列号（OCSP）。错误：`ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` / `PDF_ENCRYPTED` /
+`PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`。对恶意 PDF 有上限：10 MiB、16 个签名、嵌套 / 对象 /
+inflate / xref 链限制。
+
 ### “使用 eID 登录”按钮后端（`mn.eidmongolia.eid.login`）
 
 浏览器 `<eid-login-button>`（TS SDK）的后端——JSON、cookie 与状态码同 Go `eidlogin` / TS `createEidLogin`（通过 `eidlogin/2` 一致性语料的全部 34 个场景）。`EidLogin.handle(EidLoginRequest)` 与框架无关；JDK 服务器用 `EidLoginHttpHandler`，Servlet / Spring 见下例。推送不会泄露号码是否已注册（诱饵会话、1 秒下限）；cookie 为 HttpOnly + Secure + SameSite=Lax；状态保存在服务器（`EidLoginStore`，默认内存）；默认启用 OCSP 吊销检查（soft-fail——见上文）。
@@ -440,7 +458,7 @@ cookie）；使用 `insecureCookie`、`cookieDomain` 或其他 `cookiePath` 时�
 | PAdES prepare / complete / suggestPlacement / 登记请求体 | ✓ |
 | `sealPdf`（可见印章图案——默认，不可见） | ✓（golden v12） |
 | 带 QR 的印章图案（`SealOptions.qr`）、已签名文档的 docId 规则 | ✓ golden v13 |
-| ValidatePDF（验证已签名 PDF） | 尚未支持 |
+| ValidatePDF（验证已签名 PDF） | ✓ |
 | 印章登记（`POST /seal/{orgEtsi}/registrations`、`sealForDocument`） | ✓ |
 
 ### 从 0.1.x 迁移
@@ -465,6 +483,8 @@ cookie）；使用 `insecureCookie`、`cookieDomain` 或其他 `cookiePath` 时�
   tag 或 commit（当前 golden v13 = commit `499aa5c`，无 tag；`scripts/sync-pades-golden.sh <tag|sha>`；CI 的 `golden-sync`
   job 用 `--check` 比对）。测试 PKI 的私钥
   已移除——公民的签名已写在 manifest 中。`myqr_vectors.json`——CA 的合约 vector（sha256 已固定）。
+- ValidatePDF 语料库：`src/test/resources/pades-validate` = Go 仓库的 `pades/testdata/validate`（+ 其引用的 `golden/output|input`），
+  取自 `pades-validate/SOURCE` 中的 commit（`scripts/sync-pades-validate.sh <commit>`；CI 的 `validate-sync` job 用 `--check` 比对；测试校验 `SHA256SUMS`）。
 - 测试（`./gradlew build`，仅在 CI 中）：每个 golden 用例都执行 prepare → manifest 的签名 → complete（HTTP fixture
   回放，固定 nonce/时间）→ 将输出 PDF 的 sha256 与 Go 的比对；placement vectors（每个 box）、validate v4
  （吊销证据、结构检查）、错误代码、“我的 QR” vectors。

@@ -17,7 +17,7 @@
 - **Бүрэн RP-API клиент** (`mn.eidmongolia.eid`, 0.2.0-оос): нэвтрэлт, гарын үсэг, session, OCSP цуцлалттай хариуны
   validator, PDF гарын үсгийн бүртгэл, байгууллага / иргэн / e-Seal / токен / share, «Миний QR» клиент ба «eID-ээр нэвтрэх»
   товчны backend — Go ба TypeScript SDK-тэй ижил хүрээ (доорх дэмжлэгийн хүснэгт).
-- Хараахан үгүй: гарын үсэгтэй PDF шалгах (ValidatePDF) — файлын SHA-256-аар CA-ийн бүртгэлээс шалга, эсвэл Go / TS SDK.
+- Гарын үсэгтэй PDF шалгах (`EidPades.validatePdf`) — Go / TS-тэй ижил тайлан (доор).
 
 
 Бусад SDK: [Go](https://github.com/gerege-systems/eid-mongolia-sdk-go) ·
@@ -347,6 +347,25 @@ PdfSignatureRegistered reg = eid.seal().registerSealedPdf("NTRMN-1234567", seale
 `pdf().registerSignature`-тэй ижил хослолоор дахин оролдоно, CA-ийн кодууд `EidErrorCodes.SEAL_REGISTER` (төрөлжсөн
 `SealNotFound`, `SealDocMismatch`, `DocIdReserved`). `qr`-гүй гаралт өмнөхтэйгөө байт-ижил.
 
+### Гарын үсэгтэй PDF шалгах (`EidPades.validatePdf`)
+
+```java
+PdfReport r = EidPades.validatePdf(pdf, ValidatePdfOptions.DEFAULT);   // mn.eidmongolia.eid.pades.validate
+r.indication();                       // "valid" | "invalid" | "indeterminate"
+r.signatures().get(0).problems();     // ["revoked"], ["modified_after_signing"] …
+String json = r.toJson();             // CA-ийн /v3/validate/pdf-тэй ижил JSON (Go / TS SDK-тэй ижил)
+```
+
+Go `pades.ValidatePDF` / TS `validatePdf`-ийн порт: ByteRange / messageDigest, CMS гарын үсэг (RSA PKCS#1 / ECDSA),
+signing-certificate-v2, үндэсний Root CA хүртэлх гинж (fail-closed: nameConstraints ба танихгүй critical extension-тэй
+гэрчилгээ гинжид орохгүй, RSA ≥ 2048), KU/EKU, RFC 3161 цагийн тэмдэг, гарын үсгийн дараах revision (shadow / нэмсэн
+өөрчлөлт → `modified_after_signing`; харагдах тамга APPEARANCE_SPEC §5), цуцлалт (DSS-ийн OCSP/CRL; `offline(false)`
+бол AIA OCSP / CDP CRL), LTV, `PAdES-BASELINE-B/T/LT`, `certificate_level`. Сонголт: `roots`, `intermediates`,
+`issuers`, `time`, `offline`, `transport` (`EidPadesTransport`). Баримт сүлжээгээр явахгүй — зөвхөн гэрчилгээний serial
+(OCSP). Алдаа: `ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` / `PDF_ENCRYPTED` / `PDF_NO_SIGNATURE` /
+`PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Халдагчийн PDF-д хязгаартай: 10 MiB, 16 гарын үсэг, давхарлалт / объект /
+inflate / xref гинжийн дээд хязгаар.
+
 ### «eID-ээр нэвтрэх» товчны backend (`mn.eidmongolia.eid.login`)
 
 Хөтчийн `<eid-login-button>` (TS SDK) ашигладаг backend — Go `eidlogin` / TS `createEidLogin`-тэй ижил JSON, cookie, статус код (conformance `eidlogin/2`-ийн 34 сценари). `EidLogin.handle(EidLoginRequest)` нь framework-аас хамааралгүй; JDK серверт `EidLoginHttpHandler`, Servlet / Spring-д доорх жишээ. Push нь бүртгэлтэй эсэхийг задлахгүй (decoy, 1 с доод хугацаа), cookie нь HttpOnly + Secure + SameSite=Lax, төлөв серверт (`EidLoginStore`, анхдагч санах ой), OCSP цуцлалт анхдагчаар (soft-fail — дээрхийг үз).
@@ -449,7 +468,7 @@ callback `eid_error=expired`). 0.2.0-оос шинэчлэхэд явагдаж 
 | PAdES prepare / complete / suggestPlacement / бүртгэлийн бие | ✓ |
 | `sealPdf` (харагдах тамганы дардас — анхдагч, үл харагдах) | ✓ (golden v12) |
 | QR-тэй тамганы дардас (`SealOptions.qr`), гарын үсэгтэй баримтын docId дүрэм | ✓ golden v13 |
-| ValidatePDF (гарын үсэгтэй PDF шалгах) | хараахан үгүй |
+| ValidatePDF (гарын үсэгтэй PDF шалгах) | ✓ |
 | Тамганы бүртгэл (`POST /seal/{orgEtsi}/registrations`, `sealForDocument`) | ✓ |
 
 ### 0.1.x-ээс шилжих
@@ -475,6 +494,8 @@ callback `eid_error=expired`). 0.2.0-оос шинэчлэхэд явагдаж 
   tag эсвэл commit-оос (одоо golden v13 = commit `499aa5c`, tag алга; `scripts/sync-pades-golden.sh <tag|sha>`; CI
   `golden-sync` job нь `--check`-ээр тулгана). Тестийн PKI-ийн хувийн
   түлхүүр хасагдсан — иргэний гарын үсэг manifest-д бэлэн. `myqr_vectors.json` — CA-ийн гэрээний vector (sha256 бэхэлсэн).
+- ValidatePDF corpus: `src/test/resources/pades-validate` = Go-ийн `pades/testdata/validate` (+ хэрэгтэй `golden/output|input`),
+  `pades-validate/SOURCE` commit-оос (`scripts/sync-pades-validate.sh <commit>`; CI `validate-sync` job `--check`; `SHA256SUMS`-ийг тест тулгана).
 - Тест (`./gradlew build`, зөвхөн CI-д): golden тохиолдол бүр prepare → manifest-ийн гарын үсэг → complete (HTTP fixture
   replay, тогтмол nonce/цаг) → гаралтын PDF-ийн sha256-ийг Go-ийнхтэй тулгана; placement vectors (box бүр), validate v4
   (цуцлалтын нотолгоо, бүтцийн шалгалт), алдааны кодууд, «Миний QR» vectors.
