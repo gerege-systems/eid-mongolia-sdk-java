@@ -2,8 +2,11 @@
 # sync-pades-golden.sh — Go reference-ийн (gerege-systems/eid-mongolia-sdk-go) PAdES golden vector-уудыг
 # src/test/resources/golden руу vendor хийнэ (native SDK бүр ижил fixture-ийг байт-ижил давтана).
 #
-#   scripts/sync-pades-golden.sh <ref>       # Go репогийн tag/commit-оос татаж бичнэ (жишээ: pades-golden-v2)
+#   scripts/sync-pades-golden.sh <ref>       # Go репогийн tag эсвэл БҮТЭН commit SHA-аас татаж бичнэ (жишээ: pades-golden-v11)
 #   scripts/sync-pades-golden.sh --check     # vendored хуулбар golden/SOURCE-ийн ref-тэй таарч буйг шалгана (CI)
+#
+# golden v12/v13-д Go репод tag алга (.NET build/go-sdk.ref-тэй адил commit-оор pin хийнэ): golden/SOURCE =
+# 499aa5c343dad03518ae8420d511cf78c3ff6e8e (pades-golden-v13 + §6.6 docId засварууд; pades/-ийн сүүлийн commit).
 #
 # Тестийн PKI-ийн хувийн түлхүүрийг (PRIVATE KEY блок, *.key*) ХАСНА — тест иргэний гарын үсгийг
 # manifest-ийн `signature`-аас авна.

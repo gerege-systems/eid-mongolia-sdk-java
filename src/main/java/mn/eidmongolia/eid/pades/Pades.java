@@ -104,16 +104,11 @@ final class Pades {
         List<Cert> issuers = new ArrayList<>(EidChain.issuers());
         issuers.add(chain.get(0));
         Precheck.Result pre = Precheck.run(doc, issuers);
-        String docId = notEmpty(o.docId()) ? o.docId() : null;
+        boolean seal = mn.eidmongolia.eid.SealService.isSealCertificate(cert.raw);
+        // A stamp with QR: the citizen stamp (§3) or the seal stamp with QR (§6.5).
+        boolean drawsQr = o.appearance() != null && (!seal || o.sealQr());
+        String docId = resolveDocId(doc, pre, o.docId());
         boolean hasPage = pre.newDoc && o.verifyPage();
-        if (!pre.newDoc) {
-            String fromPage = Precheck.docIdFromPage(doc);
-            if (fromPage != null) {
-                if (docId != null && !docId.equals(fromPage)) throw new EidPadesException.RequestInvalid("docId does not match the document's verify page");
-                docId = fromPage;
-            }
-        }
-        if (pre.newDoc && docId == null) docId = randomUuid();
         byte[] base = doc;
         String pageHex = null;
         if (hasPage) {
@@ -128,7 +123,8 @@ final class Pades {
             pageHex = Text.hex(Cms.sha256(base));
         }
         String name = o.signerName() != null && !Text.trimSpace(o.signerName()).isEmpty() ? o.signerName() : cert.displayName();
-        Appearance.Visible vis = o.appearance() != null ? visibleSpec(doc, o, name, now, docId == null ? "" : docId, pre.revIndex) : null;
+        Appearance.Visible vis = o.appearance() != null ? visibleSpec(doc, o, name, now, docId == null ? "" : docId, pre.revIndex, seal, drawsQr)
+            : null;
         // vis.page counts the input's pages; a verify page added in front shifts them by one in base (PLACEMENT_SPEC §1b).
         Appearance.Visible onBase = vis != null && hasPage && first ? vis.onPage(vis.page + 1) : vis;
         SignatureRevision.Prepared prep;
@@ -276,10 +272,41 @@ final class Pades {
         return new EidPadesException.RequestInvalid("appearance: " + msg);
     }
 
-    /** Go visibleSpec: page (0 → the last page that is not an eID verify page), h100, language, date (+08), verify URL. */
-    private static Appearance.Visible visibleSpec(byte[] doc, PrepareOptions o, String name, Date now, String docId, int revIndex) {
+    /**
+     * Go resolveDocID (APPEARANCE_SPEC.md §6.6). Unsigned: [given], else random. Signed: (1) the verify-page link; (2) else
+     * the earliest-drawn /EIDVerify-marked stamp of a checked e-Seal signature ([Precheck.Result.seals]); a found docId
+     * that differs from [given] → REQUEST_INVALID; (3) else [given] (may be empty — visibleSpec rejects a QR then). Never a
+     * random docId on a signed document: the CA rejects a rev > 1 registration for an unknown docId (DOC_NOT_FOUND).
+     * Returns null for "none".
+     */
+    private static String resolveDocId(byte[] doc, Precheck.Result pre, String given0) {
+        String given = notEmpty(given0) ? given0 : null;
+        if (pre.newDoc) return given != null ? given : randomUuid();
+        String found = Precheck.docIdFromPage(doc);
+        if (found == null) {
+            try {
+                found = Precheck.docIdFromStamps(doc, pre.seals);
+            } catch (Exception e) {
+                throw new EidPadesException.PdfInvalid("PDF does not parse (signature stamp): " + e.getMessage());
+            }
+        }
+        if (found != null && given != null && !given.equals(found)) {
+            throw new EidPadesException.RequestInvalid("docId does not match the document's verify page / stamp");
+        }
+        return found != null ? found : given;
+    }
+
+    /**
+     * Go visibleSpec: page (0 → the last page that is not an eID verify page), h100, language, date (+08), verify URL.
+     * [seal] (the signer certificate is an e-Seal one) → the organisation seal stamp (APPEARANCE_SPEC.md §6): with QR when
+     * [qr] (§6.5), else without a URL (§6.2). [qr] requires a docId (REQUEST_INVALID).
+     */
+    private static Appearance.Visible visibleSpec(byte[] doc, PrepareOptions o, String name, Date now, String docId, int revIndex,
+                                                  boolean seal, boolean qr) {
         SignatureAppearance a = o.appearance();
-        if (docId.isEmpty()) throw new EidPadesException.RequestInvalid("appearance: docId required (document has no verify page)");
+        if (docId.isEmpty() && qr) {
+            throw new EidPadesException.RequestInvalid("appearance: docId required (document has no verify page or QR stamp)");
+        }
         int[] ln;
         try {
             ln = Appearance.defaultStampPage(doc, Precheck.VERIFY_URL + docId);
@@ -293,7 +320,7 @@ final class Pades {
         String lang = notEmpty(a.lang()) ? a.lang() : notEmpty(o.lang()) ? o.lang() : "mn";
         return new Appearance.Visible(page, Appearance.round100(a.x()), Appearance.round100(a.y()), Appearance.round100(a.width()),
             Appearance.round100(a.height()), Text.trimSpace(name), o.claimedRole() == null ? "" : o.claimedRole(), lang,
-            df.format(now) + " (+08)", Precheck.VERIFY_URL + docId + "/" + revIndex, a.exact());
+            df.format(now) + " (+08)", qr ? Precheck.VERIFY_URL + docId + "/" + revIndex : "", a.exact(), seal);
     }
 
     /** Go `pades.SuggestPlacement` (PLACEMENT_SPEC.md §6b): [prepare]'s placement without signing. */

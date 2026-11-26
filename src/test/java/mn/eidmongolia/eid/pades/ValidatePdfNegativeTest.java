@@ -20,7 +20,7 @@ import org.junit.Test;
 
 /**
  * Targeted negatives on top of the corpus: tampering inside the signed range, a shadow revision appended after the
- * signature, a foreign trust anchor, the seal-stamp cases still pending (must fail closed), typed errors for malformed
+ * signature, a foreign trust anchor, typed errors for malformed
  * input, and a deterministic mutation / truncation sweep (only a report or a ValidatePdfException, bounded time).
  */
 public class ValidatePdfNegativeTest {
@@ -118,17 +118,6 @@ public class ValidatePdfNegativeTest {
     public void embeddedNationalRootDoesNotTrustTheTestPki() {
         PdfReport r = EidPades.validatePdf(valid(), ValidatePdfOptions.builder().time(Instant.parse("2026-10-14T04:00:30Z")).offline(true).build());
         assertTrue(r.signatures().get(0).problems().contains("untrusted_chain"));
-    }
-
-    @Test
-    public void pendingSealStampCasesFailClosed() {
-        Json.Obj m = ValidatePdfGoldenTest.manifest();
-        for (Object c0 : (List<?>) m.get("cases")) {
-            Json.Obj c = (Json.Obj) c0;
-            if (!ValidatePdfGoldenTest.PENDING.containsKey(c.getString("name"))) continue;
-            PdfReport r = EidPades.validatePdf(ValidatePdfGoldenTest.res(c.getString("input")), golden());
-            assertNotEquals(c.getString("name"), "valid", r.indication());
-        }
     }
 
     private static String code(byte[] d) {

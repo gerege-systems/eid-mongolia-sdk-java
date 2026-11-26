@@ -7,7 +7,9 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 import mn.eidmongolia.eid.internal.Cert;
 import mn.eidmongolia.eid.internal.Der;
@@ -68,11 +70,14 @@ final class Precheck {
         final boolean newDoc;
         final int revIndex;
         final List<String> priorCmsSha256;
+        /** Checked e-Seal signatures: signature dictionary object number → position (APPEARANCE_SPEC.md §6.6). */
+        final Map<Integer, Integer> seals;
 
-        Result(boolean newDoc, int revIndex, List<String> priorCmsSha256) {
+        Result(boolean newDoc, int revIndex, List<String> priorCmsSha256, Map<Integer, Integer> seals) {
             this.newDoc = newDoc;
             this.revIndex = revIndex;
             this.priorCmsSha256 = priorCmsSha256;
+            this.seals = seals;
         }
     }
 
@@ -117,7 +122,7 @@ final class Precheck {
     static Result run(byte[] doc, List<Cert> issuers) {
         Scanned sc = open(doc);
         List<SigDict> sigs = sc.sigs;
-        if (sigs.isEmpty()) return new Result(true, 1, Collections.emptyList());
+        if (sigs.isEmpty()) return new Result(true, 1, Collections.emptyList(), Collections.emptyMap());
         if (sigs.size() >= MAX_SIGNATURES) throw new EidPadesException.PdfTooManySignatures("too many signatures");
         List<Checked> checked = new ArrayList<>();
         for (SigDict s : sigs) {
@@ -139,7 +144,152 @@ final class Precheck {
             }
             prior.add(c.cmsSha256);
         }
-        return new Result(false, sigs.size() + 1, prior);
+        return new Result(false, sigs.size() + 1, prior, stampSources(sigs, checked));
+    }
+
+    /**
+     * Go stampSources (APPEARANCE_SPEC.md §6.6 step 2.2): of the checked signatures ONLY those with an e-Seal certificate,
+     * signature dictionary object number → position (1 + the number of checked signatures whose ByteRange[2] + [3] is
+     * smaller — PRECHECKS #6 / the validator's revIndex). A citizen signature is never a docId source.
+     */
+    private static Map<Integer, Integer> stampSources(List<SigDict> sigs, List<Checked> checked) {
+        Map<Integer, Integer> out = new HashMap<>();
+        for (int i = 0; i < sigs.size(); i++) {
+            if (!mn.eidmongolia.eid.SealService.isSealCertificate(checked.get(i).leaf.raw)) continue;
+            SigDict s = sigs.get(i);
+            long end = s.byteRange.get(2) + s.byteRange.get(3);
+            int rev = 1;
+            for (SigDict o : sigs) {
+                if (o.byteRange.get(2) + o.byteRange.get(3) < end) rev++;
+            }
+            out.put(s.obj, rev);
+        }
+        return out;
+    }
+
+    /** The QR stamp form stream's first line (APPEARANCE_SPEC.md §5 step 6): docId = group 1, rev = group 2. */
+    private static final Pattern STAMP_MARKER = Pattern.compile(
+        "^/EIDVerify <</URL \\(https://ca\\.eidmongolia\\.mn/verify/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/([1-9][0-9]?)\\)>> BDC\n");
+    /** The marker line's maximum length read from the form stream (bytes). */
+    private static final int STAMP_MARKER_MAX = 128;
+
+    /**
+     * Go docIDFromStamps (APPEARANCE_SPEC.md §6.6 step 2.2): the docId of the earliest-drawn /EIDVerify-marked stamp of the
+     * checked e-Seal signatures [seals]. Widget = a dictionary object of the latest xref with its OWN {@code /FT /Sig} and
+     * its OWN {@code /V} an indirect reference (raw, not resolved; number and generation as in the xref) to one of [seals].
+     * Two passes: (1) count each seal signature's widgets (+ the first, in object order), skipping objects that do not
+     * read; (2) read the stamp only of a signature with exactly ONE widget: {@code /AP} dict, {@code /N} stream,
+     * {@code /Filter} absent or a DIRECT null, the first ≤ 128 of the stream's {@code /Length} bytes match [STAMP_MARKER]
+     * and the marker's rev equals that signature's position. Smallest ByteRange[2] + [3] wins (tie: smaller object
+     * number). None → null. A read failure of a single-widget candidate's own /AP, /N, /Length, /DecodeParms or stream
+     * throws (Prepare: PDF_INVALID) whatever the xref order. A hint for choosing the docId, not a proof — Complete's
+     * checks and the validators decide.
+     */
+    static String docIdFromStamps(byte[] doc, Map<Integer, Integer> seals) {
+        if (seals.isEmpty()) return null;
+        PdfReader r = PdfReader.open(doc);
+        Map<Integer, Integer> widgets = new HashMap<>();
+        Map<Integer, Integer> first = new HashMap<>();
+        for (int id : r.objectIds()) {
+            PdfDict d;
+            try {
+                PdfObj v = strictObj(r, new PdfRef(id, xrefGen(r, id)));
+                if (!(v instanceof PdfObj.Dict)) continue;
+                d = ((PdfObj.Dict) v).d();
+            } catch (RuntimeException e) {
+                continue;
+            }
+            PdfRef sp = d.get("V").ref();
+            if (sp == null || !seals.containsKey(sp.id()) || !r.xref.containsKey(sp.id()) || xrefGen(r, sp.id()) != sp.gen()) continue;
+            String ft;
+            try {
+                ft = strict(r, d.get("FT")).name();
+            } catch (RuntimeException e) {
+                continue;
+            }
+            if (!"Sig".equals(ft)) continue;
+            int n = widgets.merge(sp.id(), 1, Integer::sum);
+            if (n == 1) first.put(sp.id(), id);
+        }
+        long best = Long.MAX_VALUE;
+        int bestObj = 0;
+        String found = null;
+        for (Map.Entry<Integer, Integer> e : widgets.entrySet()) {
+            if (e.getValue() != 1) continue;
+            int obj = e.getKey();
+            Object[] st = readStamp(r, first.get(obj), obj, seals.get(obj));
+            String id = (String) st[0];
+            long end = (Long) st[1];
+            if (id == null || end < 0) continue;
+            if (end < best || end == best && obj < bestObj) {
+                best = end;
+                bestObj = obj;
+                found = id;
+            }
+        }
+        return found;
+    }
+
+    private static int xrefGen(PdfReader r, int id) {
+        PdfReader.XrefEntry xe = r.xref.get(id);
+        return xe == null || xe.compressed ? 0 : xe.gen;
+    }
+
+    /**
+     * [PdfReader.obj] with the Go pdf reader's check that the object found at the xref offset carries the referenced
+     * number AND generation ("n g obj"; Go panics on a mismatch) — this step's reads follow the Go reader exactly.
+     */
+    private static PdfObj strictObj(PdfReader r, PdfRef ref) {
+        PdfReader.XrefEntry xe = r.xref.get(ref.id());
+        if (xe != null && !xe.compressed && xe.gen == ref.gen()) {
+            PdfLexer lx = new PdfLexer(r.bytes, xe.off);
+            Integer n = PdfLexer.toInt(lx.word());
+            Integer g = PdfLexer.toInt(lx.word());
+            if (n == null || g == null || n != ref.id() || g != ref.gen()) throw new PdfException("object " + ref.id() + " not at its xref offset");
+        }
+        return r.obj(ref);
+    }
+
+    /** [PdfReader.resolve] through [strictObj]. */
+    private static PdfObj strict(PdfReader r, PdfObj o) {
+        PdfObj cur = o;
+        int n = 0;
+        while (cur instanceof PdfObj.Ref) {
+            if (++n >= 16) throw new PdfException("reference loop");
+            cur = strictObj(r, ((PdfObj.Ref) cur).r());
+        }
+        return cur;
+    }
+
+    /** Go readStamp: {docId or null, ByteRange[2] + [3] or -1} of a single-widget e-Seal signature. Read errors throw. */
+    private static Object[] readStamp(PdfReader r, int widget, int sig, int rev) {
+        PdfDict w = strictObj(r, new PdfRef(widget, xrefGen(r, widget))).dict();
+        PdfDict s = strictObj(r, new PdfRef(sig, xrefGen(r, sig))).dict();
+        long end = -1;
+        PdfObj br = s == null ? PdfObj.NULL : strict(r, s.get("ByteRange"));
+        if (br instanceof PdfObj.Arr && ((PdfObj.Arr) br).items().size() == 4) {
+            PdfObj b2 = strict(r, ((PdfObj.Arr) br).items().get(2));
+            PdfObj b3 = strict(r, ((PdfObj.Arr) br).items().get(3));
+            if (b2 instanceof PdfObj.Int && b3 instanceof PdfObj.Int) end = ((PdfObj.Int) b2).v() + ((PdfObj.Int) b3).v();
+        }
+        PdfObj ap = w == null ? PdfObj.NULL : strict(r, w.get("AP"));
+        PdfObj n = ap instanceof PdfObj.Dict ? strict(r, ((PdfObj.Dict) ap).d().get("N")) : PdfObj.NULL;
+        if (!(n instanceof PdfObj.Stream)) return new Object[] {null, end};
+        PdfObj.Stream ns = (PdfObj.Stream) n;
+        // /Filter: absent or a DIRECT null only (an indirect one, even to null, is not "absent" — §6.3).
+        if (!(ns.d().get("Filter") instanceof PdfObj.Null)) return new Object[] {null, end};
+        // Go Value.Reader: /Length (resolved; non-integer → 0) bytes from the stream start; /DecodeParms is resolved too.
+        PdfObj len = strict(r, ns.d().get("Length"));
+        strict(r, ns.d().get("DecodeParms"));
+        long length = len instanceof PdfObj.Int ? ((PdfObj.Int) len).v() : 0;
+        int start = ns.start();
+        // Go's lexer requires an EOL after `stream` (else it fails → PDF_INVALID).
+        if (start < 1 || r.bytes[start - 1] != '\n' && r.bytes[start - 1] != '\r') throw new PdfException("stream keyword not followed by newline");
+        int stop = (int) Math.min((long) start + Math.max(0, Math.min(length, STAMP_MARKER_MAX)), r.bytes.length);
+        String head = new String(r.bytes, start, Math.max(0, stop - start), StandardCharsets.ISO_8859_1);
+        java.util.regex.Matcher m = STAMP_MARKER.matcher(head);
+        if (m.find() && m.group(2).equals(Integer.toString(rev))) return new Object[] {m.group(1), end};
+        return new Object[] {null, end};
     }
 
     /**

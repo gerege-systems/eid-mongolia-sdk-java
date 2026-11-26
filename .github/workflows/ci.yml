@@ -43,7 +43,7 @@ jobs:
           path: build/test-results/
 
   golden-sync:
-    # The vendored golden = the Go repo tag in golden/SOURCE (byte for byte, private keys stripped).
+    # The vendored golden = the Go repo tag or commit in golden/SOURCE (byte for byte, private keys stripped).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

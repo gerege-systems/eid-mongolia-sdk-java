@@ -8,6 +8,5 @@
 - **Яагаад:** Java SDK-г Go / TS-тэй ижил хүрээтэй болгох (parity plan WP 7).
 - **Хаана:** `src/main/java/mn/eidmongolia/eid/pades/validate/`, `pades/ValidateSupport.java`, `EidPades.validatePdf`;
   corpus `src/test/resources/pades-validate` (Go 67e05f1 = v0.31.0, `scripts/sync-pades-validate.sh`, CI `validate-sync`).
-- **Шалгалт:** corpus 62/67 тайлан яг тэнцүү; 5 нь харагдах e-Seal тамганы (golden v12/v13) бичигчийг хүлээж SKIPPED
-  (fail-closed — тест үүнийг баталгаажуулна); сөрөг тест (байт өөрчлөх, shadow revision, итгэлгүй root, гэмтсэн бүтэц,
-  таслалт / mutation sweep).
+- **Шалгалт:** corpus 67/67 тайлан яг тэнцүү (харагдах e-Seal / QR тамга — golden v13 бичигчээр); сөрөг тест (байт
+  өөрчлөх, shadow revision, итгэлгүй root, гэмтсэн бүтэц, таслалт / mutation sweep).

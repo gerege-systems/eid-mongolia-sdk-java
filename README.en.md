@@ -309,11 +309,26 @@ EidQr.Result r = eid.qr().result(qs, WaitOptions.builder().maxWait(Duration.ofMi
 ### Sealing a PDF (`EidPades.sealPdf`)
 
 ```java
-Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().invisible(true).build());
+// Default: a visible seal stamp (no QR / link) at the bottom-right of the last page that is not an eID verify page
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().build());
+Placement where = sealed.placement();   // null = invisible
+// Your own position: .appearance(new SignatureAppearance(1, 36, 36, 220, 64, "en", true)); no stamp: .invisible(true)
 ```
 
-**Invisible seals only in this release**: the visible seal stamp and the QR stamp are pending the PAdES engine's golden
-v12 / v13 catch-up; `invisible(false)` (the default) throws `REQUEST_INVALID` without any network call.
+The organisation seal stamp (Go `SealPDF`, APPEARANCE_SPEC §6, golden v12): automatic placement up to 220 × 64 pt, 36 pt
+from the edges, moved to a free spot when it would cover content (PLACEMENT_SPEC); when it does not fit the page, or its
+fonts would push the output over the size limit, the seal is written invisible (`placement()` = null). An invalid
+explicit `appearance` is `REQUEST_INVALID`. A visible `prepare` with an e-Seal certificate (KeyUsage = nonRepudiation
+only, no EKU) draws the seal stamp too.
+
+**Behaviour changes (from 0.2.0, matching Go):**
+- `sealPdf` defaults to the visible stamp — in 0.2.0 `invisible(false)` was `REQUEST_INVALID`. Validators released
+  before the seal stamp (older CA / TS SDK) report the earlier signatures as modified — keep `invisible(true)` until
+  they are updated (its output is byte-identical to 0.2.0).
+- `docId` on a signed document (APPEARANCE_SPEC §6.6, golden v13): the verify page, else the `/EIDVerify` marker of an
+  organisation seal stamp with QR, else `PrepareOptions.docId`; a found docId that differs from it is `REQUEST_INVALID`
+  (also for an invisible signature). No random docId on a signed document (as before). Like Go, this SDK does not emit
+  the seal stamp with QR (§6.5) yet — not until the CA / TS validators accept it (it is golden-tested only).
 
 ### Validating a signed PDF (`EidPades.validatePdf`)
 
@@ -333,9 +348,6 @@ appended changes → `modified_after_signing`; visible stamps per APPEARANCE_SPE
 only certificate serials (OCSP). Errors: `ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` /
 `PDF_ENCRYPTED` / `PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Bounded for hostile PDFs: 10 MiB, 16
 signatures, nesting / object / inflate / xref-chain limits.
-
-**Limit:** a *visible* e-Seal stamp (golden v12/v13) after an earlier signature fails closed — the PAdES writer does not
-have the seal stamp variants yet, so the earlier signature reads `modified_after_signing` (5 corpus cases SKIPPED).
 
 ### «Sign in with eID» button backend (`mn.eidmongolia.eid.login`)
 
@@ -430,8 +442,9 @@ are unaffected.
 | My QR parse / verify / start / result / check | ✓ |
 | Sign-in button backend (JDK adapter; Servlet / Spring snippets) | ✓ |
 | PAdES prepare / complete / suggestPlacement / registration body | ✓ |
-| `sealPdf` | invisible only — the visible / QR seal stamp is pending the golden v12 / v13 catch-up |
-| ValidatePDF (verify a signed PDF) | ✓ (unreleased) — a visible e-Seal stamp after an earlier signature fails closed (pending v12/v13) |
+| `sealPdf` (visible seal stamp — default, invisible) | ✓ (golden v12) |
+| Seal stamp with QR, docId rule for signed documents | ✓ golden v13 (the QR seal stamp is not public, as in Go) |
+| ValidatePDF (verify a signed PDF) | ✓ |
 | Seal registration (`POST /v3/seal/{org}/registrations`) | not yet (in no SDK yet) |
 
 ### Migrating from 0.1.x
@@ -454,8 +467,9 @@ are unaffected.
 
 - Profile rules: the Go repo's `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`,
   `PLACEMENT_SPEC.md`.
-- Golden: `src/test/resources/golden` = the Go repo's `pades/testdata/golden` (+ the `validate/` inputs), from the tag in `golden/SOURCE`
-  (`scripts/sync-pades-golden.sh <tag>`; the CI `golden-sync` job checks it with `--check`). The test PKI's private
+- Golden: `src/test/resources/golden` = the Go repo's `pades/testdata/golden` (+ the `validate/` inputs), from the tag or commit in
+  `golden/SOURCE` (now golden v13 = commit `499aa5c`, no tag; `scripts/sync-pades-golden.sh <tag|sha>`; the CI
+  `golden-sync` job checks it with `--check`). The test PKI's private
   keys have been removed — the citizen's signature is ready in the manifest. `myqr_vectors.json` — the CA's contract vectors (sha256 pinned).
 - ValidatePDF corpus: `src/test/resources/pades-validate` = the Go repo's `pades/testdata/validate` (+ the `golden/output|input` files it
   names), from the commit in `pades-validate/SOURCE` (`scripts/sync-pades-validate.sh <commit>`; CI `validate-sync` checks it with `--check`; a test checks `SHA256SUMS`).

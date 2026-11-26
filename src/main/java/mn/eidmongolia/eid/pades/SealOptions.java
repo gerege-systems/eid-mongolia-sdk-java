@@ -9,11 +9,23 @@ import java.util.List;
  * {@link EidPades#sealPdf} options (Go {@code pades.SealOptions}). No verification (QR) page is added: the seal is not
  * entered in the citizen signature registry ({@code POST /pdf/signatures}).
  *
- * <p><b>Invisible only in this release.</b> The Go reference draws a visible organisation seal stamp by default
- * (APPEARANCE_SPEC.md §6, golden v12/v13); this SDK's PAdES engine is still at golden v11, so {@link #invisible()} must
- * be true — otherwise {@code sealPdf} fails with REQUEST_INVALID before any network call (the default will become the
- * visible stamp once the golden catch-up lands; asking for invisible explicitly keeps today's output then too).
- * {@code invisible(true)} is byte-for-byte Go {@code SealOptions{Invisible: true}} (the v0.29 SealPDF output).
+ * <p><b>The seal stamp is visible by default</b> (APPEARANCE_SPEC.md §6, golden v12): the organisation seal stamp — no QR
+ * or link — on the last page that is not an eID verify page, bottom-right, moved to a free spot when it would cover
+ * content (PLACEMENT_SPEC.md):
+ * <ul>
+ *   <li>{@link #invisible()} true → no stamp, byte-for-byte Go {@code SealOptions{Invisible: true}} (and the 0.2.0 output);</li>
+ *   <li>{@link #appearance()} given → used as is (page, x, y, width, height, lang, exact; as a citizen stamp); invalid →
+ *       REQUEST_INVALID;</li>
+ *   <li>neither → automatic (§6.4): up to {@link EidPades#SEAL_STAMP_WIDTH} × {@link EidPades#SEAL_STAMP_HEIGHT} pt,
+ *       {@link EidPades#SEAL_STAMP_MARGIN} pt from the bottom-right corner (fitted on small pages), not exact; when it
+ *       cannot be drawn (page unreadable or too small, the text does not fit, or its fonts push the output over the size
+ *       limit) the seal is written invisible instead.</li>
+ * </ul>
+ * The result's position is {@link Completed#placement()} (null when invisible).
+ *
+ * <p><b>Behaviour change from 0.2.0:</b> 0.2.0 required {@code invisible(true)} and failed with REQUEST_INVALID otherwise;
+ * the default is now the visible stamp, as in Go/.NET. Validators released before the seal stamp (older CA / TS SDK)
+ * report the earlier signatures as modified — keep {@code invisible(true)} until they are updated.
  */
 public final class SealOptions {
     private final String reason;
@@ -22,6 +34,7 @@ public final class SealOptions {
     private final List<byte[]> chain;
     private final CompleteOptions complete;
     private final boolean invisible;
+    private final SignatureAppearance appearance;
 
     private SealOptions(Builder b) {
         reason = b.reason;
@@ -32,6 +45,7 @@ public final class SealOptions {
         chain = Collections.unmodifiableList(c);
         complete = b.complete == null ? CompleteOptions.DEFAULT : b.complete;
         invisible = b.invisible;
+        appearance = b.appearance;
     }
 
     public static Builder builder() {
@@ -65,9 +79,14 @@ public final class SealOptions {
         return complete;
     }
 
-    /** No stamp — required in this release (see the class comment). */
+    /** No stamp (the 0.2.0 / Go v0.29 SealPDF output); {@link #appearance()} is then ignored. Default false. */
     public boolean invisible() {
         return invisible;
+    }
+
+    /** The stamp's position (same values as a citizen stamp); null = automatic (see the class comment). */
+    public SignatureAppearance appearance() {
+        return appearance;
     }
 
     public static final class Builder {
@@ -77,6 +96,7 @@ public final class SealOptions {
         private List<byte[]> chain;
         private CompleteOptions complete;
         private boolean invisible;
+        private SignatureAppearance appearance;
 
         private Builder() {
         }
@@ -108,6 +128,11 @@ public final class SealOptions {
 
         public Builder invisible(boolean v) {
             invisible = v;
+            return this;
+        }
+
+        public Builder appearance(SignatureAppearance v) {
+            appearance = v;
             return this;
         }
 

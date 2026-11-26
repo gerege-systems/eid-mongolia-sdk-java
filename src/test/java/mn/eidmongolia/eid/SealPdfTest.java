@@ -14,6 +14,7 @@ import mn.eidmongolia.eid.pades.EidPades;
 import mn.eidmongolia.eid.pades.EidPadesException;
 import mn.eidmongolia.eid.pades.SealOptions;
 import mn.eidmongolia.eid.pades.Sealer;
+import mn.eidmongolia.eid.pades.SignatureAppearance;
 import org.junit.Test;
 
 /**
@@ -89,6 +90,16 @@ public class SealPdfTest {
             assertTrue(e.retryable());
         }
         assertEquals(1, s.sealed.size());
+        // The default (visible seal stamp, golden v12) takes the same path: the stamp is prepared, sealed, completed.
+        FakeSealer v = new FakeSealer((byte[]) c[1], (byte[]) c[1], (KeyPair) c[0]);
+        try {
+            EidPades.sealPdf(v, ORG, pdf(), SealOptions.builder().chain(List.of(CA.der)).complete(opts().complete()).build());
+            fail();
+        } catch (EidPadesException e) {
+            assertEquals("TSA_UNAVAILABLE", e.code());
+        }
+        assertEquals(1, v.sealed.size());
+        assertTrue(!java.util.Arrays.equals(s.sealed.get(0), v.sealed.get(0)));
     }
 
     @Test
@@ -96,15 +107,16 @@ public class SealPdfTest {
         Object[] c = sealCert(TestCerts.KU_NON_REPUDIATION);
         byte[] cert = (byte[]) c[1];
         KeyPair key = (KeyPair) c[0];
-        // Visible stamp not supported yet → REQUEST_INVALID before any call.
+        // An explicit stamp rect outside the page → REQUEST_INVALID before the seal call (no automatic fallback).
         FakeSealer s = new FakeSealer(cert, cert, key);
-        s.certErr = new IllegalStateException("must not be called");
         try {
-            EidPades.sealPdf(s, ORG, pdf(), SealOptions.builder().build());
+            EidPades.sealPdf(s, ORG, pdf(), SealOptions.builder().chain(List.of(CA.der))
+                .appearance(new SignatureAppearance(1, 10000, 10000, 220, 64, null, true)).build());
             fail();
         } catch (EidPadesException e) {
             assertEquals("REQUEST_INVALID", e.code());
         }
+        assertTrue(s.sealed.isEmpty());
         try {
             EidPades.sealPdf(null, ORG, pdf(), opts());
             fail();

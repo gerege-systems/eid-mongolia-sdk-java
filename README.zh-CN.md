@@ -306,11 +306,23 @@ EidQr.Result r = eid.qr().result(qs, WaitOptions.builder().maxWait(Duration.ofMi
 ### 为 PDF 加盖电子印章（`EidPades.sealPdf`）
 
 ```java
-Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().invisible(true).build());
+// 默认：可见印章图案（无 QR / 链接），位于最后一个非 eID verify 页的右下角
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().build());
+Placement where = sealed.placement();   // null = 不可见
+// 自定位置：.appearance(new SignatureAppearance(1, 36, 36, 220, 64, "en", true))；不加图案：.invisible(true)
 ```
 
-**本版本仅支持不可见印章**：可见印章图案与带 QR 的印章需等待 PAdES 引擎追上 golden v12 / v13；`invisible(false)`
-（默认）会在不访问网络的情况下抛出 `REQUEST_INVALID`。
+机构印章图案（Go `SealPDF`，APPEARANCE_SPEC §6，golden v12）：自动位置最大 220 × 64 pt，距边 36 pt，若覆盖页面内容则移到
+空闲位置（PLACEMENT_SPEC）；页面放不下或字体会使输出超过大小上限时，改为不可见印章（`placement()` = null）。显式
+`appearance` 无效时为 `REQUEST_INVALID`。用 e-Seal 证书（KeyUsage 仅 nonRepudiation、无 EKU）调用带外观的 `prepare`
+也会绘制印章图案。
+
+**行为变更（相对 0.2.0，与 Go 一致）：**
+- `sealPdf` 默认绘制可见图案——0.2.0 中 `invisible(false)` 为 `REQUEST_INVALID`。早于印章图案的验证器（旧版 CA / TS SDK）
+  会把之前的签名报告为已修改——在它们更新之前请使用 `invisible(true)`（其输出与 0.2.0 逐字节相同）。
+- 已签名文档的 `docId`（APPEARANCE_SPEC §6.6，golden v13）：verify 页；否则带 QR 的机构印章图案的 `/EIDVerify` 标记；
+  否则 `PrepareOptions.docId`；与已找到的 docId 不一致则 `REQUEST_INVALID`（不可见签名亦然）。已签名文档不会生成随机
+  docId（与之前相同）。与 Go 一样，本 SDK 暂不输出带 QR 的印章图案（§6.5）——须待 CA / TS 验证器支持（目前仅由 golden 验证）。
 
 ### 验证已签名的 PDF（`EidPades.validatePdf`）
 
@@ -329,9 +341,6 @@ KU/EKU、RFC 3161 时间戳、签名之后的修订（shadow / 追加的修改 �
 只有证书序列号（OCSP）。错误：`ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` / `PDF_ENCRYPTED` /
 `PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`。对恶意 PDF 有上限：10 MiB、16 个签名、嵌套 / 对象 /
 inflate / xref 链限制。
-
-**限制：** 在先前签名之后的*可见* e-Seal 印章（golden v12/v13）会 fail-closed——PAdES 写入器尚无印章变体，因此先前的签名
-显示为 `modified_after_signing`（语料库中 5 个用例为 SKIPPED）。
 
 ### “使用 eID 登录”按钮后端（`mn.eidmongolia.eid.login`）
 
@@ -423,8 +432,9 @@ EidLogin login = EidLogin.builder(eid)
 | 我的 QR parse / verify / start / result / check | ✓ |
 | 登录按钮后端（JDK 适配器；Servlet / Spring 示例） | ✓ |
 | PAdES prepare / complete / suggestPlacement / 登记请求体 | ✓ |
-| `sealPdf` | 仅不可见——可见 / 带 QR 的印章等待 golden v12 / v13 |
-| ValidatePDF（验证已签名 PDF） | ✓（未发布）——先前签名之后的可见 e-Seal 印章 fail-closed（等待 v12/v13） |
+| `sealPdf`（可见印章图案——默认，不可见） | ✓（golden v12） |
+| 带 QR 的印章图案、已签名文档的 docId 规则 | ✓ golden v13（带 QR 的印章图案与 Go 一样未公开） |
+| ValidatePDF（验证已签名 PDF） | ✓ |
 | 印章登记（`POST /v3/seal/{org}/registrations`） | 尚未支持（目前任何 SDK 都没有） |
 
 ### 从 0.1.x 迁移
@@ -446,7 +456,8 @@ EidLogin login = EidLogin.builder(eid)
 - Profile 规则：Go 仓库的 `pades/PROFILE.md`、`PAGE_SPEC.md`、`PRECHECKS.md`、`WIRE.md`、`APPEARANCE_SPEC.md`、
   `PLACEMENT_SPEC.md`。
 - Golden：`src/test/resources/golden` = Go 仓库的 `pades/testdata/golden`（+ `validate/` 输入），取自 `golden/SOURCE` 中的
-  tag（`scripts/sync-pades-golden.sh <tag>`；CI 的 `golden-sync` job 用 `--check` 比对）。测试 PKI 的私钥
+  tag 或 commit（当前 golden v13 = commit `499aa5c`，无 tag；`scripts/sync-pades-golden.sh <tag|sha>`；CI 的 `golden-sync`
+  job 用 `--check` 比对）。测试 PKI 的私钥
   已移除——公民的签名已写在 manifest 中。`myqr_vectors.json`——CA 的合约 vector（sha256 已固定）。
 - ValidatePDF 语料库：`src/test/resources/pades-validate` = Go 仓库的 `pades/testdata/validate`（+ 其引用的 `golden/output|input`），
   取自 `pades-validate/SOURCE` 中的 commit（`scripts/sync-pades-validate.sh <commit>`；CI 的 `validate-sync` job 用 `--check` 比对；测试校验 `SHA256SUMS`）。

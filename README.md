@@ -308,11 +308,25 @@ EidQr.Result r = eid.qr().result(qs, WaitOptions.builder().maxWait(Duration.ofMi
 ### PDF-д тамга дарах (`EidPades.sealPdf`)
 
 ```java
-Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().invisible(true).build());
+// Анхдагч: харагдах тамганы дардас (QR / холбоосгүй), сүүлийн (eID verify биш) хуудасны баруун доод буланд
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().build());
+Placement where = sealed.placement();   // null = үл харагдах
+// Байршлыг өөрөө: .appearance(new SignatureAppearance(1, 36, 36, 220, 64, "en", true)); дардасгүй: .invisible(true)
 ```
 
-**Энэ хувилбарт зөвхөн үл харагдах тамга**: харагдах тамганы дардас ба QR-тэй тамга PAdES хөдөлгүүрийн golden v12 / v13-д
-хүрэхийг хүлээж байна; `invisible(false)` (анхдагч) сүлжээгүйгээр `REQUEST_INVALID`.
+Байгууллагын тамганы дардас (Go `SealPDF`, APPEARANCE_SPEC §6, golden v12): автомат байршил ≤ 220 × 64 pt, захаас 36 pt,
+агуулгатай давхцвал чөлөөт байрлал руу (PLACEMENT_SPEC); хуудсанд багтахгүй эсвэл фонт нь гаралтыг хэмжээний хязгаараас
+хэтрүүлэх бол үл харагдах тамга (`placement()` = null). Тодорхой `appearance` буруу бол `REQUEST_INVALID`. `prepare`-д
+e-Seal гэрчилгээ (KeyUsage = зөвхөн nonRepudiation, EKU-гүй) өгвөл харагдах гарын үсэг мөн тамганы дардас болно.
+
+**Зан төлөвийн өөрчлөлт (0.2.0-оос, Go-той ижил):**
+- `sealPdf`-ийн анхдагч нь харагдах дардас — 0.2.0-д `invisible(false)` нь `REQUEST_INVALID` байсан. Тамганы дардсыг
+  танихаас өмнөх шалгагчид (хуучин CA / TS SDK) өмнөх гарын үсгийг modified гэж мэдээлнэ — тэд шинэчлэгдэх хүртэл
+  `invisible(true)` ашиглана уу (гаралт нь 0.2.0-тэй байт-ижил).
+- Гарын үсэгтэй баримтын `docId` (APPEARANCE_SPEC §6.6, golden v13): verify хуудас, эс бөгөөс байгууллагын тамганы
+  QR-тэй дардасны `/EIDVerify` тэмдэг, эс бөгөөс `PrepareOptions.docId`; олдсонтой зөрвөл `REQUEST_INVALID` (үл
+  харагдах гарын үсэгт ч). Гарын үсэгтэй баримтад санамсаргүй docId үүсгэхгүй (өмнөх шиг). QR-тэй тамганы дардсыг
+  (§6.5) энэ SDK Go-той адил одоохондоо гаргахгүй — CA / TS шалгагч хүлээн авах хүртэл (golden-аар л шалгагдсан).
 
 ### Гарын үсэгтэй PDF шалгах (`EidPades.validatePdf`)
 
@@ -332,9 +346,6 @@ signing-certificate-v2, үндэсний Root CA хүртэлх гинж (fail-c
 (OCSP). Алдаа: `ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` / `PDF_ENCRYPTED` / `PDF_NO_SIGNATURE` /
 `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Халдагчийн PDF-д хязгаартай: 10 MiB, 16 гарын үсэг, давхарлалт / объект /
 inflate / xref гинжийн дээд хязгаар.
-
-**Хязгаар:** e-Seal-ийн *харагдах* тамга (golden v12/v13) өмнөх гарын үсгийн дараа байвал PAdES бичигч тамганы
-хувилбаргүй тул fail-closed — өмнөх гарын үсэг `modified_after_signing` (corpus-ийн 5 тохиолдол SKIPPED).
 
 ### «eID-ээр нэвтрэх» товчны backend (`mn.eidmongolia.eid.login`)
 
@@ -429,8 +440,9 @@ Web2App-д нөлөөлөхгүй.
 | «Миний QR» parse / verify / start / result / check | ✓ |
 | Нэвтрэх товчны backend (JDK adapter; Servlet / Spring жишээ) | ✓ |
 | PAdES prepare / complete / suggestPlacement / бүртгэлийн бие | ✓ |
-| `sealPdf` | зөвхөн үл харагдах — харагдах / QR-тэй тамга golden v12 / v13-ыг хүлээж байна |
-| ValidatePDF (гарын үсэгтэй PDF шалгах) | ✓ (unreleased) — харагдах e-Seal тамганы дараах тохиолдол fail-closed (v12/v13-ыг хүлээж байна) |
+| `sealPdf` (харагдах тамганы дардас — анхдагч, үл харагдах) | ✓ (golden v12) |
+| QR-тэй тамганы дардас, гарын үсэгтэй баримтын docId дүрэм | ✓ golden v13 (QR-тэй дардас Go-той адил нийтэд нээгдээгүй) |
+| ValidatePDF (гарын үсэгтэй PDF шалгах) | ✓ |
 | Тамганы бүртгэл (`POST /v3/seal/{org}/registrations`) | хараахан үгүй (ямар ч SDK-д алга) |
 
 ### 0.1.x-ээс шилжих
@@ -453,7 +465,8 @@ Web2App-д нөлөөлөхгүй.
 - Профайлын дүрэм: Go репогийн `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`,
   `PLACEMENT_SPEC.md`.
 - Golden: `src/test/resources/golden` = Go репогийн `pades/testdata/golden` (+ `validate/` оролтууд), `golden/SOURCE`
-  tag-аас (`scripts/sync-pades-golden.sh <tag>`; CI `golden-sync` job нь `--check`-ээр тулгана). Тестийн PKI-ийн хувийн
+  tag эсвэл commit-оос (одоо golden v13 = commit `499aa5c`, tag алга; `scripts/sync-pades-golden.sh <tag|sha>`; CI
+  `golden-sync` job нь `--check`-ээр тулгана). Тестийн PKI-ийн хувийн
   түлхүүр хасагдсан — иргэний гарын үсэг manifest-д бэлэн. `myqr_vectors.json` — CA-ийн гэрээний vector (sha256 бэхэлсэн).
 - ValidatePDF corpus: `src/test/resources/pades-validate` = Go-ийн `pades/testdata/validate` (+ хэрэгтэй `golden/output|input`),
   `pades-validate/SOURCE` commit-оос (`scripts/sync-pades-validate.sh <commit>`; CI `validate-sync` job `--check`; `SHA256SUMS`-ийг тест тулгана).

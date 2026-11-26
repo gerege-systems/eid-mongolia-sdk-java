@@ -34,12 +34,15 @@ final class Appearance {
         final String lang;
         /** «YYYY-MM-DD HH:MM (+08)» */
         final String date;
-        /** https://ca.eidmongolia.mn/verify/<docId>/<revIndex> */
+        /** https://ca.eidmongolia.mn/verify/<docId>/<revIndex>; empty with [seal] = the QR-less seal stamp (§6.2) */
         final String url;
         /** PLACEMENT_SPEC §6a: never move the stamp; the scan only reports OVERLAP. */
         final boolean exact;
+        /** Organisation seal stamp (APPEARANCE_SPEC.md §6): the signer certificate is an e-Seal one. */
+        final boolean seal;
 
-        Visible(int page, long x, long y, long w, long h, String name, String role, String lang, String date, String url, boolean exact) {
+        Visible(int page, long x, long y, long w, long h, String name, String role, String lang, String date, String url, boolean exact,
+                boolean seal) {
             this.page = page;
             this.x = x;
             this.y = y;
@@ -51,10 +54,11 @@ final class Appearance {
             this.date = date;
             this.url = url;
             this.exact = exact;
+            this.seal = seal;
         }
 
         Visible onPage(int p) {
-            return new Visible(p, x, y, w, h, name, role, lang, date, url, exact);
+            return new Visible(p, x, y, w, h, name, role, lang, date, url, exact, seal);
         }
     }
 
@@ -68,8 +72,13 @@ final class Appearance {
         final String lang;
         final String date;
         final String url;
+        /**
+         * Organisation seal stamp (APPEARANCE_SPEC.md §6): seal labels, the role is never drawn. Empty [url] → QR-less
+         * (§6.2); otherwise the citizen layout (§3) — QR, /EIDVerify BDC — with the seal label and no role line (§6.5).
+         */
+        final boolean seal;
 
-        Params(int w, int h, int rotate, String name, String role, String lang, String date, String url) {
+        Params(int w, int h, int rotate, String name, String role, String lang, String date, String url, boolean seal) {
             this.w = w;
             this.h = h;
             this.rotate = rotate;
@@ -78,6 +87,11 @@ final class Appearance {
             this.lang = lang;
             this.date = date;
             this.url = url;
+            this.seal = seal;
+        }
+
+        Params withRole(String r) {
+            return new Params(w, h, rotate, name, r, lang, date, url, seal);
         }
     }
 
@@ -96,6 +110,8 @@ final class Appearance {
     static final int MAX_SIDE = 1440000;
 
     private static final Map<String, String> LABELS = Map.of("mn", "eID Mongolia-аар зурсан", "en", "Signed with eID Mongolia");
+    /** The seal stamp's label line (APPEARANCE_SPEC.md §6, Go core.SealLabels). */
+    private static final Map<String, String> SEAL_LABELS = Map.of("mn", "eID Mongolia-аар тамгалсан", "en", "Sealed with eID Mongolia");
 
     /** pt → h100: floor(v × 100 + 0.5). */
     static long round100(double v) {
@@ -162,9 +178,17 @@ final class Appearance {
         }
     }
 
-    /** Form XObject content stream (APPEARANCE_SPEC.md §3). */
-    static byte[] content(Params p) {
-        String label = LABELS.get(p.lang);
+    /** Form XObject content stream (APPEARANCE_SPEC.md §3; seal: §6.2 or §6.5). */
+    static byte[] content(Params p0) {
+        Params p = p0;
+        if (p.seal && p.url.isEmpty()) return sealContent(p);
+        Map<String, String> labels = LABELS;
+        if (p.seal) {
+            // §6.5: exactly the citizen stamp (§3) — the seal label, never a role line.
+            labels = SEAL_LABELS;
+            p = p.withRole("");
+        }
+        String label = labels.get(p.lang);
         if (label == null) throw new AppearanceException("language " + p.lang);
         if (!VerifyPage.asciiUrl(p.url)) throw new AppearanceException("URL is not ASCII");
         if (p.w <= 0 || p.h <= 0 || p.w > MAX_SIDE || p.h > MAX_SIDE) throw new AppearanceException("size");
@@ -223,6 +247,45 @@ final class Appearance {
         }
         if (!cm.isEmpty()) w.op("Q");
         w.op("EMC");
+        return w.ops.toString().getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /**
+     * QR-less seal stamp content stream (APPEARANCE_SPEC.md §6.2, Go core.sealContent): the citizen stamp's frame, fonts
+     * and line rules; no QR, /EIDVerify BDC or role; the text starts at pad and uses the full width (W − 2·pad).
+     */
+    private static byte[] sealContent(Params p0) {
+        String label = SEAL_LABELS.get(p0.lang);
+        if (label == null) throw new AppearanceException("language " + p0.lang);
+        if (p0.w <= 0 || p0.h <= 0 || p0.w > MAX_SIDE || p0.h > MAX_SIDE) throw new AppearanceException("size");
+        Params p = p0.withRole("");
+        int tw = p.w - 2 * PAD;
+        VerifyPage.Writer w = new VerifyPage.Writer(PageFont.regular(), PageFont.bold());
+        List<Line> lines = null;
+        int f = MAX_SIZE;
+        while (f >= MIN_SIZE && lines == null && tw > 0) {
+            lines = layout(w, p, label, f, tw);
+            f--;
+        }
+        if (lines == null) throw new AppearanceException("too small (text does not fit)");
+        int total = 0;
+        for (Line l : lines) total += l.size * LEADING;
+        String cm = rotation(p.rotate, p.w, p.h).cm;
+        if (!cm.isEmpty()) {
+            w.op("q");
+            w.op(cm);
+        }
+        w.op(VerifyPage.OK + " RG");
+        w.op("1 w");
+        w.op("0.5 0.5 " + num100(p.w - 100) + " " + num100(p.h - 100) + " re S");
+        int cursor = p.h - PAD - (p.h - 2 * PAD - total) / 2;
+        for (Line l : lines) {
+            cursor -= l.size * LEADING;
+            w.op(l.color + " rg");
+            w.op("BT /F" + l.font + " " + l.size + " Tf " + num100(PAD) + " " + num100(cursor + l.size * DESCENT) + " Td "
+                + w.glyphHex(l.font, l.text) + " Tj ET");
+        }
+        if (!cm.isEmpty()) w.op("Q");
         return w.ops.toString().getBytes(StandardCharsets.ISO_8859_1);
     }
 

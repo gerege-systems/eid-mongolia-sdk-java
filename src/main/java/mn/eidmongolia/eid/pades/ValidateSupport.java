@@ -23,10 +23,7 @@ final class ValidateSupport implements PadesSupport {
     @Override
     public List<byte[]> appearanceObjects(int w, int h, int rotate, String name, String role, String lang, String date, String url,
         boolean seal, int[] ids) {
-        // The seal stamp variants (APPEARANCE_SPEC.md §6, golden v12/v13) are not in this writer yet: a visible e-Seal stamp
-        // is never recognised as the writer's own (fail closed — the earlier signature reads modified_after_signing).
-        if (seal) throw new UnsupportedOperationException("seal stamp");
-        return Appearance.objects(new Appearance.Params(w, h, rotate, name, role, lang, date, url), ids);
+        return Appearance.objects(new Appearance.Params(w, h, rotate, name, role, lang, date, url, seal), ids);
     }
 
     @Override
