@@ -40,8 +40,11 @@ final class RpHttp {
         this.lang = lang;
     }
 
-    /** A decoded response: the HTTP status (200 / 201 …) and the JSON value (an empty object for an empty body). */
-    record Result(int status, Object json) {
+    /**
+     * A decoded response: the HTTP status (200 / 201 …), the JSON value (an empty object for an empty body) and the raw
+     * body bytes (empty for an empty body).
+     */
+    record Result(int status, Object json, byte[] raw) {
         Json.Obj obj(String op) {
             if (json instanceof Json.Obj) return (Json.Obj) json;
             throw new EidException("eid: " + op + ": хариу JSON объект биш");
@@ -95,9 +98,9 @@ final class RpHttp {
         }
         byte[] raw = res.body();
         if (raw.length > MAX_JSON_BODY) throw new EidException.ResponseTooLarge(op, MAX_JSON_BODY);
-        if (new String(raw, StandardCharsets.UTF_8).isBlank()) return new Result(res.status(), new Json.Obj());
+        if (new String(raw, StandardCharsets.UTF_8).isBlank()) return new Result(res.status(), new Json.Obj(), new byte[0]);
         try {
-            return new Result(res.status(), Json.parse(raw));
+            return new Result(res.status(), Json.parse(raw), raw);
         } catch (IllegalArgumentException e) {
             throw new EidException("eid: " + op + ": хариу задарсангүй: " + e.getMessage(), e);
         }
