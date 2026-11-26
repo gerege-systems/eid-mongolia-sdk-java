@@ -65,17 +65,28 @@ public record EidLoginRequest(String method, String url, Map<String, List<String
         return v == null || v.isEmpty() || v.get(0) == null ? "" : v.get(0);
     }
 
-    /** A cookie's value from the Cookie header(s) (first match), else "" (TS {@code readCookie}). */
+    /**
+     * A cookie's value when the Cookie header(s) carry EXACTLY ONE part with that name, else "" (rp-conformance/2, Go
+     * {@code singleCookie}, TS {@code readCookie}): every header split on ";", each part trimmed, name = text before the
+     * first "=" (trimmed), value = the rest (trimmed). Two or more parts with the name — whatever their values — count as
+     * no cookie, so a cookie planted from a sibling host or another path cannot shadow the real one.
+     */
     String cookie(String name) {
         List<String> all = headers.get("Cookie");
         if (all == null) return "";
+        String value = "";
+        int n = 0;
         for (String line : all) {
-            for (String part : line.split(";")) {
-                int i = part.indexOf('=');
-                if (i > 0 && part.substring(0, i).trim().equals(name)) return part.substring(i + 1).trim();
+            if (line == null) continue;
+            for (String part : line.split(";", -1)) {
+                String p = part.trim();
+                int i = p.indexOf('=');
+                if (i < 0 || !p.substring(0, i).trim().equals(name)) continue;
+                value = p.substring(i + 1).trim();
+                n++;
             }
         }
-        return "";
+        return n == 1 ? value : "";
     }
 
     String lowerMethod() {

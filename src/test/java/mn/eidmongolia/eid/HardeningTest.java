@@ -14,10 +14,10 @@ import mn.eidmongolia.eid.internal.Cert;
 import org.junit.Test;
 
 /**
- * The purely-stricter cross-SDK hardening (not in Go / TS): the RP OCSP checker verifies leaf ← issuer before any
- * network call and binds CertID by default; a subject with more than one SERIALNUMBER / CN is rejected
- * ({@link ValidationReasons#SUBJECT_DUPLICATE_IDENTITY}). All 17 rp-conformance OCSP cases stay green with both
- * (ConformanceTest#ocsp runs the default builder).
+ * Cross-SDK hardening (Java 0.2.0 first, rp-conformance/2 for every SDK since): the RP OCSP checker verifies leaf ← issuer
+ * before any network call and binds CertID; a subject with more than one SERIALNUMBER / CN is rejected
+ * ({@link ValidationReasons#SUBJECT_DUPLICATE_IDENTITY}); plus the v2 rules no corpus case exercises — a weak RSA key in
+ * the trust pool is a configuration error, and an empty / "." / ".." path parameter is refused on every route.
  */
 public class HardeningTest {
 
@@ -54,6 +54,49 @@ public class HardeningTest {
         java.security.cert.X509Certificate issuer = ConformanceTest.cert(ConformanceTest.bytes(good.optString("issuer")));
         assertEquals(RevocationStatus.GOOD, check.check(leaf, issuer));
         assertEquals(1, seen.size());
+    }
+
+    /** rp-conformance/2: a trust-pool certificate with a weak RSA key (&lt; 2048 bits, or an even / &lt; 3 exponent) is rejected. */
+    @Test
+    public void weakTrustPoolKeyIsAConfigurationError() {
+        String good = ConformanceTest.pemText("pki/01-root.pem");
+        for (String weak : new String[] {"pki/ocsp-responder-rsa-1024.pem", "pki/leaf-sign-rsa-even-exponent.pem"}) {
+            String pem = ConformanceTest.pemText(weak);
+            for (boolean anchor : new boolean[] {true, false}) {
+                TrustConfig.Builder b = TrustConfig.builder().trustAnchorsPem(anchor ? List.of(good, pem) : List.of(good))
+                    .intermediatesPem(anchor ? List.of() : List.of(pem));
+                try {
+                    new ResponseValidator(b.build());
+                    fail(weak + (anchor ? " as anchor" : " as intermediate"));
+                } catch (IllegalArgumentException expected) {
+                    assertTrue(expected.getMessage(), expected.getMessage().contains(anchor ? "TrustAnchorsPEM" : "IntermediatesPEM"));
+                }
+            }
+        }
+        new ResponseValidator(TrustConfig.builder().trustAnchorsPem(List.of(good)).intermediatesPem(List.of()).build());
+    }
+
+    /** rp-conformance/2 (Go 704e7b1): every route template refuses an empty, "." or ".." value in each of its parameters. */
+    @Test
+    public void everyRouteRefusesDotPathParameters() {
+        int checked = 0;
+        for (Routes.Route r : Routes.ALL) {
+            int n = r.path().split("\\{", -1).length - 1;
+            for (int at = 0; at < n; at++) {
+                for (String bad : new String[] {"", ".", ".."}) {
+                    String[] args = new String[n];
+                    java.util.Arrays.fill(args, "x");
+                    args[at] = bad;
+                    try {
+                        r.expand(args);
+                        fail(r.path() + " #" + at + " " + bad);
+                    } catch (IllegalArgumentException expected) {
+                        checked++;
+                    }
+                }
+            }
+        }
+        assertTrue("routes with parameters: " + checked, checked >= 3 * 20);
     }
 
     @Test

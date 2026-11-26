@@ -278,7 +278,7 @@ public class HttpErrorTest {
 
     @Test
     public void routesAndMaskPath() {
-        assertEquals(32, Routes.ALL.size());
+        assertEquals(33, Routes.ALL.size());
         assertEquals("/session/a%2Fb%3Fc%23d%20e", Routes.SESSION.expand("a/b?c#d e"));
         assertEquals("/session/$&+:=@-._~", Routes.SESSION.expand("$&+:=@-._~"));
         assertEquals("/seal/certificate/NTRMN-1/requests/r1", Routes.SEAL_CERTIFICATE_REQUEST_STATUS.expand("NTRMN-1", "r1"));

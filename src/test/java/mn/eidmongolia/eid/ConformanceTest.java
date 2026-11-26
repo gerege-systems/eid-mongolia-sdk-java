@@ -33,7 +33,7 @@ import java.util.stream.Stream;
 import org.junit.Test;
 
 /**
- * The cross-SDK RP conformance corpus ({@code rp-conformance/1}) — src/test/resources/conformance is an UNEDITED copy
+ * The cross-SDK RP conformance corpus ({@code rp-conformance/2}) — src/test/resources/conformance is an UNEDITED copy
  * of the Go reference's testdata/conformance at the commit in conformance/SOURCE (scripts/sync-conformance.sh; CI
  * {@code conformance-sync}), README.md there is the spec. Port of Go conformance_test.go (TestConformanceManifest,
  * TestConformanceRPValidate, TestConformanceWire, TestConformanceInteractions, TestConformanceACSP, TestConformanceOCSP).
@@ -84,9 +84,9 @@ public class ConformanceTest {
     @Test
     public void manifest() throws IOException, URISyntaxException {
         Json.Obj m = json("manifest.json");
-        assertEquals("rp-conformance/1", m.optString("version"));
+        assertEquals("rp-conformance/2", m.optString("version"));
         Json.Obj files = m.optObj("files");
-        assertTrue("files " + files.keySet().size(), files.keySet().size() >= 40);
+        assertEquals("files", 52, files.keySet().size());
         for (String rel : files.keySet()) assertEquals(rel + " sha256", files.optString(rel), sha256(bytes(rel)));
         // Nothing else vendored: no generator keys, no stray files (SOURCE = the pinned Go commit).
         URL root = ConformanceTest.class.getResource("/" + DIR + "manifest.json");
@@ -146,10 +146,10 @@ public class ConformanceTest {
     @Test
     public void rpValidate() {
         Json.Obj f = json("rp-validate/cases.json");
-        assertEquals("rp-validate/1", f.optString("version"));
+        assertEquals("rp-validate/2", f.optString("version"));
         Json.Obj trusts = f.optObj("trust");
         List<Object> cases = f.optArr("cases");
-        assertEquals("cases", 77, cases.size());
+        assertEquals("cases", 88, cases.size());
         runAll("rp-validate", cases, c -> rpValidateCase(c, trusts));
     }
 
@@ -573,9 +573,9 @@ public class ConformanceTest {
     @Test
     public void ocsp() {
         Json.Obj f = json("ocsp/cases.json");
-        assertEquals("ocsp-checker/1", f.optString("version"));
+        assertEquals("ocsp-checker/2", f.optString("version"));
         List<Object> cases = f.optArr("cases");
-        assertEquals("cases", 17, cases.size());
+        assertEquals("cases", 24, cases.size());
         runAll("ocsp", cases, ConformanceTest::ocspCase);
     }
 
@@ -612,7 +612,9 @@ public class ConformanceTest {
         Json.Obj exp = c.optObj("expect");
         assertEquals("status (" + kind + ")", exp.optString("status"), status);
         assertEquals("errorKind", exp.optString("errorKind"), kind);
-        assertFalse("requests", seen.isEmpty());
+        // v2: a leaf the given issuer did not issue is refused before the cache and before any network call.
+        if ("no_issuer".equals(kind)) assertTrue("no request for no_issuer", seen.isEmpty());
+        else assertFalse("requests", seen.isEmpty());
         for (EidHttpRequest r : seen) {
             assertEquals("POST", r.method());
             assertEquals("application/ocsp-request", r.headers().get("Content-Type"));

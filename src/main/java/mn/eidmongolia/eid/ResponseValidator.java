@@ -129,11 +129,18 @@ public final class ResponseValidator {
             List<byte[]> blocks = Cert.pemBlocks(s == null ? "" : s);
             if (blocks.isEmpty()) throw new IllegalArgumentException("eid: " + what + ": PEM CERTIFICATE блок алга");
             for (byte[] der : blocks) {
+                Cert c;
                 try {
-                    out.add(Cert.parse(der));
+                    c = Cert.parse(der);
                 } catch (RuntimeException e) {
                     throw new IllegalArgumentException("eid: " + what + ": " + e.getMessage(), e);
                 }
+                // A trust-pool CA with a weak RSA key is a configuration error (rp-conformance/2, Go NewValidator).
+                if (c.weakRsaKey()) {
+                    throw new IllegalArgumentException("eid: " + what + ": RSA түлхүүр сул (< " + MIN_RSA_BITS + " бит эсвэл буруу exponent; "
+                        + c.serialRef() + ")");
+                }
+                out.add(c);
             }
         }
         return Collections.unmodifiableList(out);
@@ -376,7 +383,7 @@ public final class ResponseValidator {
         } catch (RuntimeException e) {
             throw invalid(ValidationReasons.CERT_MALFORMED, "гэрчилгээ задарсангүй");
         }
-        checkSubject(leaf);
+        checkLeafKeyAndSubject(leaf);
         Instant now = clock.instant();
         checkValidity(leaf, now);
         verifyCertificate(leaf, protocol, now);
@@ -387,8 +394,20 @@ public final class ResponseValidator {
     }
 
     /**
-     * Cross-SDK hardening (stricter than Go / TS): more than one SERIALNUMBER or more than one CN in the subject →
-     * {@link ValidationReasons#SUBJECT_DUPLICATE_IDENTITY} — which one is "the" identity would depend on the parser.
+     * The first checks after parsing (rp-conformance/2, Go {@code checkLeafKeyAndSubject}): a weak RSA key
+     * ({@link ValidationReasons#CERT_WEAK_KEY}), then a duplicate SERIALNUMBER / CN ({@link #checkSubject}).
+     */
+    static void checkLeafKeyAndSubject(Cert c) {
+        if (c.weakRsaKey()) {
+            throw invalid(ValidationReasons.CERT_WEAK_KEY, "гэрчилгээний RSA түлхүүр сул (< " + MIN_RSA_BITS + " бит эсвэл буруу exponent; serial "
+                + c.serial.toString(16) + ")");
+        }
+        checkSubject(c);
+    }
+
+    /**
+     * More than one SERIALNUMBER or more than one CN in the subject → {@link ValidationReasons#SUBJECT_DUPLICATE_IDENTITY}
+     * — which one is "the" identity would depend on the parser (rp-conformance/2).
      */
     static void checkSubject(Cert c) {
         if (c.subjectAttrCount(Cert.OID_SERIAL_NUMBER) > 1 || c.subjectAttrCount(Cert.OID_COMMON_NAME) > 1) {
@@ -402,7 +421,7 @@ public final class ResponseValidator {
      * validity, then purpose (auth), anchor, chain (clientAuth), issuer allowlist.
      */
     void verifyTokenAuthCertificate(Cert leaf) {
-        checkSubject(leaf);
+        checkLeafKeyAndSubject(leaf);
         Instant now = clock.instant();
         checkValidity(leaf, now);
         verifyCertificate(leaf, PROTOCOL_ACSP_V2, now);
@@ -462,12 +481,16 @@ public final class ResponseValidator {
         }
     }
 
-    /** Go {@code checkIssuer}: the direct issuer's SKI (else the leaf's AKI) must be allowed. */
+    /**
+     * Go {@code checkIssuer} (rp-conformance/2): the direct issuer's key identifier must be allowed — when the issuer is
+     * found in the trust pool ONLY its SKI (or, without an SKI extension, the RFC 5280 method-1 identifier); the leaf's
+     * own AKI is used only when no issuer is found (allowUntrusted).
+     */
     private void checkIssuer(Cert leaf) {
         if (allowedIssuers == null) return;
         byte[] ski = leaf.authorityKeyId();
         Cert is = findIssuer(leaf);
-        if (is != null && is.subjectKeyId().length > 0) ski = is.subjectKeyId();
+        if (is != null) ski = is.keyIdentifier();
         if (ski.length == 0 || !allowedIssuers.contains(Text.hex(ski))) {
             throw invalid(ValidationReasons.ISSUER_NOT_ALLOWED, "гэрчилгээг гаргасан CA зөвшөөрөгдсөн иргэний issuer биш (allowedIssuerSkis)");
         }
@@ -731,7 +754,7 @@ public final class ResponseValidator {
     /** TS {@code caReason}: the issuer CA's checks; below = intermediate CAs under it (the leaf not counted). */
     private static Bad caReason(Cert ca, int below, Instant now, String usage) {
         if (!ca.isCa()) return new Bad(ValidationReasons.CHAIN_NOT_CA, "завсрын гэрчилгээ CA биш эсвэл keyCertSign эрхгүй");
-        if (ca.isRsa() && ca.rsaBits() < MIN_RSA_BITS) return new Bad(ValidationReasons.CHAIN_UNTRUSTED, "CA-ийн RSA түлхүүр 2048 битээс бага");
+        if (ca.weakRsaKey()) return new Bad(ValidationReasons.CHAIN_UNTRUSTED, "CA-ийн RSA түлхүүр сул (< 2048 бит эсвэл буруу exponent)");
         if (ca.extensionValue(OID_KEY_USAGE) != null && !ku(ca, KU_KEY_CERT_SIGN)) {
             return new Bad(ValidationReasons.CHAIN_NOT_CA, "CA-ийн KeyUsage-д keyCertSign алга");
         }

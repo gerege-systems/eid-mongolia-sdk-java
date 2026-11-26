@@ -47,8 +47,9 @@ public final class PrepareOptions {
     private final String lang;
     private final SignatureAppearance appearance;
     private final String verifyPagePosition;
-    // APPEARANCE_SPEC.md §6.5 QR seal stamp: NOT public (Go PrepareOptions.sealQR is unexported) — no writer may emit it
-    // until the CA / TS validators accept it; set only by the golden tests.
+    // APPEARANCE_SPEC.md §6.5 QR seal stamp: NOT a public prepare option (Go PrepareOptions.sealQR is unexported) — the QR
+    // promises a registration, so only sealPdf (SealOptions.qr — docId/revIndex reservation + sealRegistration) and the
+    // golden tests set it.
     private final boolean sealQr;
 
     private PrepareOptions(Builder b) {

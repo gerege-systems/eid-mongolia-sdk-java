@@ -203,7 +203,7 @@ public class EidLoginSecurityTest {
 
     static String loginCookie(EidLoginResponse r) {
         for (String sc : r.headers().getOrDefault("Set-Cookie", List.of())) {
-            if (sc.startsWith("eid_login=")) return sc.substring(0, sc.indexOf(';'));
+            if (sc.startsWith("__Host-eid_login=")) return sc.substring(0, sc.indexOf(';'));
         }
         throw new AssertionError("no login cookie: " + r.headers());
     }
@@ -334,7 +334,7 @@ public class EidLoginSecurityTest {
         assertEquals(Map.of("user", "PNOMN-999999990001"), b.get("data"));
         // fixation: the login cookie is cleared AND the RP's fresh session cookie is set
         List<String> sc = r.headers().get("Set-Cookie");
-        assertTrue(sc.toString(), sc.stream().anyMatch(x -> x.startsWith("eid_login=; ") && x.contains("Max-Age=0")));
+        assertTrue(sc.toString(), sc.stream().anyMatch(x -> x.startsWith("__Host-eid_login=; ") && x.contains("Max-Age=0")));
         assertTrue(sc.toString(), sc.contains("app_session=fresh; Path=/; HttpOnly; Secure"));
         assertEquals(1, e.ids.size());
         EidLoginIdentity id = e.ids.get(0);
@@ -431,7 +431,7 @@ public class EidLoginSecurityTest {
         Env e = new Env(null, null);
         String cookie = loginCookie(e.post("/auth/eid/start", "{\"mode\":\"qr\"}", null));
         String other = cookie.substring(0, cookie.length() - 1) + (cookie.endsWith("x") ? "y" : "x");
-        for (String c : new String[] {null, "eid_login=" + SID + "." + "A".repeat(43), other, "eid_login=" + SID, "eid_login=x.y"}) {
+        for (String c : new String[] {null, "__Host-eid_login=" + SID + "." + "A".repeat(43), other, "__Host-eid_login=" + SID, "__Host-eid_login=x.y"}) {
             EidLoginResponse r = e.get("/auth/eid/status", c);
             assertEquals(String.valueOf(c), "EXPIRED", body(r).get("state"));
         }
@@ -772,7 +772,7 @@ public class EidLoginSecurityTest {
     @Test
     public void requestToStringRedacted() {
         EidLoginRequest r = EidLoginRequest.of("GET", "/auth/eid/callback?sessionId=" + SID + "&userChallengeVerifier=secret-verifier",
-            Map.of("Cookie", List.of("eid_login=" + SID + ".binding-secret")), "{\"idCode\":\"УБ12345678\"}", "192.0.2.1");
+            Map.of("Cookie", List.of("__Host-eid_login=" + SID + ".binding-secret")), "{\"idCode\":\"УБ12345678\"}", "192.0.2.1");
         String s = r.toString();
         assertFalse(s, s.contains("binding-secret") || s.contains("secret-verifier") || s.contains("УБ12345678") || s.contains(SID));
         assertTrue(s, s.contains("/auth/eid/callback") && s.contains("Cookie"));
@@ -796,9 +796,9 @@ public class EidLoginSecurityTest {
                 return false;
             }
         }), null);
-        EidLoginResponse cb = e.get("/auth/eid/callback?sessionId=" + SID + "&userChallengeVerifier=x", "eid_login=" + SID + "." + "A".repeat(43));
+        EidLoginResponse cb = e.get("/auth/eid/callback?sessionId=" + SID + "&userChallengeVerifier=x", "__Host-eid_login=" + SID + "." + "A".repeat(43));
         assertEquals(303, cb.status());
         assertEquals("/login?eid_error=internal", cb.header("Location"));
-        assertEquals(500, e.get("/auth/eid/status", "eid_login=" + SID + "." + "A".repeat(43)).status());
+        assertEquals(500, e.get("/auth/eid/status", "__Host-eid_login=" + SID + "." + "A".repeat(43)).status());
     }
 }

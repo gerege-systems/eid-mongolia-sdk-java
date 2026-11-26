@@ -158,6 +158,9 @@ final class RpHttp {
             case EidErrorCodes.SEAL_GRANT_NOT_FOUND: return new EidException.SealGrantNotFound(s, code, msg, raw, service, retry, h);
             case EidErrorCodes.RP_NOT_ACTIVE: return new EidException.RpNotActive(s, code, msg, raw, service, retry, h);
             case EidErrorCodes.RP_PERMISSIONS_FULL: return new EidException.RpPermissionsFull(s, code, msg, raw, service, retry, h);
+            case EidErrorCodes.SEAL_NOT_FOUND: return new EidException.SealNotFound(s, code, msg, raw, service, retry, h);
+            case EidErrorCodes.SEAL_DOC_MISMATCH: return new EidException.SealDocMismatch(s, code, msg, raw, service, retry, h);
+            case EidErrorCodes.DOC_ID_RESERVED: return new EidException.DocIdReserved(s, code, msg, raw, service, retry, h);
             default: return new EidException.Api(s, code, msg, raw, service, retry, h);
         }
     }

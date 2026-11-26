@@ -6,8 +6,9 @@ import java.util.Date;
 import java.util.List;
 
 /**
- * {@link EidPades#sealPdf} options (Go {@code pades.SealOptions}). No verification (QR) page is added: the seal is not
- * entered in the citizen signature registry ({@code POST /pdf/signatures}).
+ * {@link EidPades#sealPdf} options (Go {@code pades.SealOptions}). No verification page is added (the seal registration
+ * keeps page-less documents — CA V158); register the sealed PDF with {@link Completed#sealRegistration()} and
+ * {@code EidClient.seal().registerSealedPdf}.
  *
  * <p><b>The seal stamp is visible by default</b> (APPEARANCE_SPEC.md §6, golden v12): the organisation seal stamp — no QR
  * or link — on the last page that is not an eID verify page, bottom-right, moved to a free spot when it would cover
@@ -23,6 +24,10 @@ import java.util.List;
  * </ul>
  * The result's position is {@link Completed#placement()} (null when invisible).
  *
+ * <p>{@link #qr()} (opt-in, APPEARANCE_SPEC.md §6.5, golden v13): the stamp carries a QR to {@code /verify/<docId>/<revIndex>};
+ * the {@link Sealer} must be a {@link DocumentSealer} (the position is reserved while sealing) and the result must be
+ * registered within 7 days. The default (false) output is unchanged byte for byte.
+ *
  * <p><b>Behaviour change from 0.2.0:</b> 0.2.0 required {@code invisible(true)} and failed with REQUEST_INVALID otherwise;
  * the default is now the visible stamp, as in Go/.NET. Validators released before the seal stamp (older CA / TS SDK)
  * report the earlier signatures as modified — keep {@code invisible(true)} until they are updated.
@@ -35,6 +40,9 @@ public final class SealOptions {
     private final CompleteOptions complete;
     private final boolean invisible;
     private final SignatureAppearance appearance;
+    private final boolean qr;
+    private final String docId;
+    private final String fileName;
 
     private SealOptions(Builder b) {
         reason = b.reason;
@@ -46,6 +54,9 @@ public final class SealOptions {
         complete = b.complete == null ? CompleteOptions.DEFAULT : b.complete;
         invisible = b.invisible;
         appearance = b.appearance;
+        qr = b.qr;
+        docId = b.docId;
+        fileName = b.fileName;
     }
 
     public static Builder builder() {
@@ -89,6 +100,33 @@ public final class SealOptions {
         return appearance;
     }
 
+    /**
+     * Draw the seal stamp WITH a QR (APPEARANCE_SPEC.md §6.5, golden v13): QR = {@code /verify/<docId>/<revIndex>}. The
+     * {@link Sealer} must be a {@link DocumentSealer} (docId / revIndex are reserved while sealing — CA V158), else
+     * REQUEST_INVALID; with {@link #invisible()} → REQUEST_INVALID. The QR promises a registration: send
+     * {@link Completed#sealRegistration()} with {@code EidClient.seal().registerSealedPdf} within 7 days. When the automatic
+     * stamp does not fit the page (a QR stamp needs ≥ 45 pt height) the seal is invisible and nothing is reserved
+     * ({@link Completed#placement()} null). Default false — the QR-less stamp (§6.2), byte-identical to golden v12.
+     */
+    public boolean qr() {
+        return qr;
+    }
+
+    /**
+     * The document's UUID (lowercase; {@link PrepareOptions#docId()}, APPEARANCE_SPEC.md §6.6): an unsigned document → random
+     * when null; a signed one → the docId of its verify page / QR seal stamp when present (a different value →
+     * REQUEST_INVALID), else this value — null then gives {@link Completed#docId()} null and no registration (with
+     * {@link #qr()} → REQUEST_INVALID). Written into the stamp only with the QR.
+     */
+    public String docId() {
+        return docId;
+    }
+
+    /** The name in the CA registry (/verify; optional, NFC, ≤ 120 characters — else REQUEST_INVALID). Not written to the PDF. */
+    public String fileName() {
+        return fileName;
+    }
+
     public static final class Builder {
         private String reason;
         private String signerName;
@@ -97,6 +135,9 @@ public final class SealOptions {
         private CompleteOptions complete;
         private boolean invisible;
         private SignatureAppearance appearance;
+        private boolean qr;
+        private String docId;
+        private String fileName;
 
         private Builder() {
         }
@@ -133,6 +174,24 @@ public final class SealOptions {
 
         public Builder appearance(SignatureAppearance v) {
             appearance = v;
+            return this;
+        }
+
+        /** See {@link SealOptions#qr()}. */
+        public Builder qr(boolean v) {
+            qr = v;
+            return this;
+        }
+
+        /** See {@link SealOptions#docId()}. */
+        public Builder docId(String v) {
+            docId = v;
+            return this;
+        }
+
+        /** See {@link SealOptions#fileName()}. */
+        public Builder fileName(String v) {
+            fileName = v;
             return this;
         }
 

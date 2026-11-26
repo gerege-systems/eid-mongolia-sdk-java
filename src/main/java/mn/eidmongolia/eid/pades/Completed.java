@@ -141,6 +141,36 @@ public final class Completed {
             priorRevisionSha256, fileName, claimedRole, p);
     }
 
+    /**
+     * The CA organisation-seal registration body ({@code POST /seal/{orgEtsi}/registrations}; Go {@code pades.SealRegistration}
+     * / {@code Completed.SealRegistration}, TS {@code done.sealRegistration}) for an {@link EidPades#sealPdf} result — send it
+     * with {@code EidClient.seal().registerSealedPdf(orgEtsi, …)} within 7 days (required after {@link SealOptions#qr()}).
+     * The hashes are those of {@link #registration}: inSha256 = the input, sigRevSha256 = the output up to the end of the
+     * ByteRange, outSha256 = the output, priorCmsSha256 = every earlier signature's /Contents CMS (document order);
+     * {@link SealRegistration#priorSignatures()} keeps the revision hashes for the PRIOR_MISMATCH retry. fileName =
+     * {@link SealOptions#fileName()} (cleaned), or none.
+     *
+     * @throws EidPadesException.RequestInvalid no docId (a signed document without a verify page / QR seal stamp — pass
+     *     {@link SealOptions#docId()}), or the signer is not an e-Seal certificate (a citizen signature uses
+     *     {@link #registration})
+     */
+    public SealRegistration sealRegistration() {
+        if (docId == null || docId.isEmpty()) {
+            throw new EidPadesException.RequestInvalid("docId empty — pass SealOptions.docId for a signed document without one");
+        }
+        if (!mn.eidmongolia.eid.SealService.isSealCertificate(signerCert)) {
+            throw new EidPadesException.RequestInvalid("the signer is not an e-Seal certificate — a citizen signature uses registration()");
+        }
+        List<Registration.PriorSignature> prior = new ArrayList<>();
+        if (!priorCmsSha256.isEmpty() && priorRevisionSha256.size() == priorCmsSha256.size()) {
+            for (int i = 0; i < priorCmsSha256.size(); i++) {
+                prior.add(new Registration.PriorSignature(priorCmsSha256.get(i), priorRevisionSha256.get(i)));
+            }
+        }
+        return new SealRegistration(docId, revIndex, Text.base64(cms), fileName, inSha256, sigRevSha256, outSha256,
+            priorCmsSha256.isEmpty() ? null : priorCmsSha256, null, prior);
+    }
+
     /** {@link #registration(Medium, String, String)} with the medium inferred from sessionId. */
     public Registration registration(String sessionId, String onBehalfOf) {
         return registration(null, sessionId, onBehalfOf);

@@ -25,10 +25,11 @@ import mn.eidmongolia.eid.EidTransport;
 import org.junit.Test;
 
 /**
- * Every scenario of the cross-SDK login corpus {@code conformance/eidlogin/scenarios.json} (eidlogin/1, Go eidlogin
+ * Every scenario of the cross-SDK login corpus {@code conformance/eidlogin/scenarios.json} (eidlogin/2, Go eidlogin
  * conformance_test.go / TS conformance.test.ts) against the framework-neutral {@link EidLogin#handle}, asserting every
  * expected field (status, JSON subset / exact keys, Location, headers, Set-Cookie value and attributes, events,
- * rate-limit keys). Fails when the file is missing or does not hold exactly 24 scenarios.
+ * rate-limit keys). Fails when the file is missing, does not hold exactly 34 scenarios, or carries a key this harness
+ * does not implement (a newer corpus must not pass silently).
  */
 public class EidLoginConformanceTest {
     static final String HOST = "https://rp.conformance.test";
@@ -101,9 +102,10 @@ public class EidLoginConformanceTest {
     @Test
     public void allScenarios() {
         Map<String, Object> c = corpus();
-        assertEquals("eidlogin/1", c.get("version"));
+        assertEquals("eidlogin/2", c.get("version"));
+        checkKeys(c);
         List<Object> scenarios = arr(c.get("scenarios"));
-        assertEquals("scenarios", 24, scenarios.size());
+        assertEquals("scenarios", 34, scenarios.size());
         List<String> failures = new ArrayList<>();
         for (Object o : scenarios) {
             Map<String, Object> s = obj(o);
@@ -114,6 +116,50 @@ public class EidLoginConformanceTest {
             }
         }
         assertEquals(String.join("\n", failures), 0, failures.size());
+    }
+
+    static final java.util.Set<String> TOP_KEYS = java.util.Set.of("version", "comment", "config", "upstream", "scenarios");
+    static final java.util.Set<String> CONFIG_KEYS = java.util.Set.of("rpName", "rpUUID", "apiSecret", "callbackUrl", "successRedirect",
+        "failureRedirect", "ttlSeconds", "pollMs", "pushFloorMs", "cookieName", "wireCookieName", "cookieDomain", "cookiePath", "clientIp",
+        "auditKeyHex", "rateLimits", "revocation", "decoy", "recordRateLimitKeys");
+    static final java.util.Set<String> RULE_KEYS = java.util.Set.of("method", "path", "pathPrefix", "status", "body", "bodyText", "contentType",
+        "expiresAtInSeconds");
+    static final java.util.Set<String> SCENARIO_KEYS = java.util.Set.of("name", "comment", "config", "upstream", "steps", "events", "rateLimitKeys");
+    static final java.util.Set<String> STEP_KEYS = java.util.Set.of("request", "repeat", "expect", "upstream");
+    static final java.util.Set<String> REQUEST_KEYS = java.util.Set.of("method", "path", "headers", "json", "text", "cookieFrom", "cookieHeader", "ip");
+    static final java.util.Set<String> EXPECT_KEYS = java.util.Set.of("status", "json", "jsonKeys", "sameKeysAs", "location", "headers", "setCookie",
+        "noSetCookie");
+    static final java.util.Set<String> SET_COOKIE_KEYS = java.util.Set.of("value", "attributes", "absentAttributes", "cleared");
+    static final java.util.Set<String> EVENT_KEYS = java.util.Set.of("kind", "sessionId", "meta");
+
+    static void only(String at, Map<String, Object> m, java.util.Set<String> allowed) {
+        for (String k : m.keySet()) assertTrue(at + ": unknown corpus key \"" + k + "\" (harness does not implement it)", allowed.contains(k));
+    }
+
+    /** Every member of the corpus must be one this harness implements — a newer corpus must fail, not pass silently. */
+    static void checkKeys(Map<String, Object> c) {
+        only("top", c, TOP_KEYS);
+        only("config", obj(c.get("config")), CONFIG_KEYS);
+        for (Object r : arr(c.get("upstream"))) only("upstream", obj(r), RULE_KEYS);
+        for (Object o : arr(c.get("scenarios"))) {
+            Map<String, Object> s = obj(o);
+            String n = str(s.get("name"));
+            only(n, s, SCENARIO_KEYS);
+            only(n + " config", obj(s.get("config")), CONFIG_KEYS);
+            for (Object r : arr(s.get("upstream"))) only(n + " upstream", obj(r), RULE_KEYS);
+            for (Object e : arr(s.get("events"))) only(n + " event", obj(e), EVENT_KEYS);
+            for (Object so : arr(s.get("steps"))) {
+                Map<String, Object> st = obj(so);
+                only(n + " step", st, STEP_KEYS);
+                for (Object r : arr(st.get("upstream"))) only(n + " step upstream", obj(r), RULE_KEYS);
+                Map<String, Object> rq = obj(st.get("request"));
+                only(n + " request", rq, REQUEST_KEYS);
+                assertTrue(n + ": cookieHeader without cookieFrom", !rq.containsKey("cookieHeader") || rq.containsKey("cookieFrom"));
+                Map<String, Object> ex = obj(st.get("expect"));
+                only(n + " expect", ex, EXPECT_KEYS);
+                only(n + " setCookie", obj(ex.get("setCookie")), SET_COOKIE_KEYS);
+            }
+        }
     }
 
     static void run(Map<String, Object> baseCfg, List<Object> baseUp, Map<String, Object> s) {
@@ -127,17 +173,34 @@ public class EidLoginConformanceTest {
             .baseUrl("https://rp-api.conformance.test").transport(up).build();
         List<EidLoginEvent> events = Collections.synchronizedList(new ArrayList<>());
         List<String> keys = Collections.synchronizedList(new ArrayList<>());
-        String cookieName = str(cfg.get("cookieName"));
+        // wireCookieName — the name the browser sees (cookieName "" = the SDK default; README §eidlogin).
+        String cookieName = str(cfg.get("wireCookieName")).isEmpty() ? str(cfg.get("cookieName")) : str(cfg.get("wireCookieName"));
+        boolean noClientIp = "none".equals(cfg.get("clientIp"));
         EidLogin.Builder lb = EidLogin.builder(client)
             .callbackUrl(str(cfg.get("callbackUrl")))
             .successRedirect(str(cfg.get("successRedirect")))
             .failureRedirect(str(cfg.get("failureRedirect")))
             .ttl(Duration.ofSeconds(num(cfg.get("ttlSeconds"))))
             .poll(Duration.ofMillis(num(cfg.get("pollMs"))))
-            .cookieName(cookieName)
+            .cookieName(str(cfg.get("cookieName")))
+            .cookieDomain(str(cfg.get("cookieDomain")))
+            .cookiePath(str(cfg.get("cookiePath")))
             .disableDecoy(!Boolean.TRUE.equals(cfg.get("decoy")))
             .onEvent(events::add)
             .onSuccess((id, req) -> EidLoginSuccess.redirect("/dashboard"));
+        // A client-IP source returning the request's ip; "none" = no source at all (and no adapter ip either).
+        if (!noClientIp) lb.clientIp(EidLoginRequest::ip);
+        if (!str(cfg.get("auditKeyHex")).isEmpty()) lb.auditKey(java.util.HexFormat.of().parseHex(str(cfg.get("auditKeyHex"))));
+        if (cfg.get("rateLimits") != null) {
+            Map<String, EidLogin.RateRule> rl = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : obj(cfg.get("rateLimits")).entrySet()) {
+                Map<String, Object> m = obj(e.getValue());
+                assertEquals("rateLimits." + e.getKey() + " keys", new TreeSet<>(List.of("max", "maxKeys", "windowSeconds")),
+                    new TreeSet<>(m.keySet()));
+                rl.put(e.getKey(), EidLogin.RateRule.of(num(m.get("max")), Duration.ofSeconds(num(m.get("windowSeconds"))), num(m.get("maxKeys"))));
+            }
+            lb.rateLimits(rl);
+        }
         int floor = num(cfg.get("pushFloorMs"));
         if (floor == 0) lb.disablePushFloor(true);
         else lb.pushFloor(Duration.ofMillis(floor));
@@ -159,7 +222,7 @@ public class EidLoginConformanceTest {
             int repeat = st.containsKey("repeat") ? num(st.get("repeat")) : 1;
             Got g = null;
             for (int n = 0; n < repeat; n++) {
-                g = send(login, obj(st.get("request")), got, cookieName);
+                g = send(login, obj(st.get("request")), got, cookieName, noClientIp);
                 List<Got> view = new ArrayList<>(got);
                 view.add(g); // $sameAs may name the current step
                 check("step " + i + (repeat > 1 ? " #" + n : ""), obj(st.get("expect")), g, view);
@@ -193,7 +256,7 @@ public class EidLoginConformanceTest {
         }
     }
 
-    static Got send(EidLogin login, Map<String, Object> rq, List<Got> got, String cookieName) {
+    static Got send(EidLogin login, Map<String, Object> rq, List<Got> got, String cookieName, boolean noClientIp) {
         Map<String, List<String>> h = new LinkedHashMap<>();
         for (Map.Entry<String, Object> e : obj(rq.get("headers")).entrySet()) h.put(e.getKey(), List.of(str(e.getValue())));
         String body = null;
@@ -205,9 +268,12 @@ public class EidLoginConformanceTest {
         }
         if (rq.containsKey("cookieFrom")) {
             Got from = got.get(num(rq.get("cookieFrom")));
-            h.put("Cookie", List.of(cookieName + "=" + from.cookieValue));
+            String ck = cookieName + "=" + from.cookieValue;
+            if (rq.containsKey("cookieHeader")) ck = str(rq.get("cookieHeader")).replace("$cookieFrom", ck);
+            h.put("Cookie", List.of(ck));
         }
-        EidLoginResponse res = login.handle(EidLoginRequest.of(str(rq.get("method")), HOST + str(rq.get("path")), h, body, str(rq.get("ip"))));
+        EidLoginResponse res = login.handle(EidLoginRequest.of(str(rq.get("method")), HOST + str(rq.get("path")), h, body,
+            noClientIp ? "" : str(rq.get("ip"))));
         Got g = new Got();
         g.res = res;
         if (!res.body().isEmpty() && res.header("Content-Type") != null && res.header("Content-Type").startsWith("application/json")) {
@@ -255,6 +321,11 @@ public class EidLoginConformanceTest {
                 assertEquals(at + " cleared Max-Age", "0", g.cookieAttrs.get("Max-Age"));
             }
             if (sc.containsKey("value")) match(at + " cookie value", sc.get("value"), g.cookieValue, got);
+            for (Object a : arr(sc.get("absentAttributes"))) {
+                for (String k : g.cookieAttrs.keySet()) {
+                    assertTrue(at + " cookie attribute " + a + " must be absent", !k.equalsIgnoreCase((String) a));
+                }
+            }
             for (Map.Entry<String, Object> a : obj(sc.get("attributes")).entrySet()) {
                 Object want = a.getValue();
                 Object have = g.cookieAttrs.get(a.getKey());
