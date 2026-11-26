@@ -164,8 +164,11 @@ final class VCrypto {
         }
     }
 
-    /** Longest certificate serial (RFC 5280 §4.1.2.2: ≤ 20 octets). */
-    static final int MAX_SERIAL_BITS = 159;
+    /**
+     * Longest certificate serial: 20 octets of magnitude (RFC 5280 §4.1.2.2 allows 20 octets; CAs that draw 160 random
+     * bits encode 21 with the sign byte — accepted, as Go and the CA do).
+     */
+    static final int MAX_SERIAL_BITS = 160;
 
     /**
      * The validator's certificate entry point: {@link Cert#parse} (the SDK's single strict parser) plus the validator's

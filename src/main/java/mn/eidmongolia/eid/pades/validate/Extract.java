@@ -671,7 +671,7 @@ final class Extract {
                 hashed = Asn1.expect(Asn1.at(mi, 1), Asn1.OCTET_STRING, "hashedMessage").value();
                 if (hashed.length == 0) return out;
                 Asn1.Node sn = Asn1.expect(Asn1.at(info, 3), Asn1.INTEGER, "serial");
-                if (sn.length() > 20) return out; // RFC 3161 serials are small; a huge one makes the token malformed
+                if (sn.length() > 21) return out; // ≤ 160-bit serial (+ sign byte); a huge one makes the token malformed
                 serial = GoFmt.hexSerial(sn.value());
                 time = Asn1.preciseTime(Asn1.expect(Asn1.at(info, 4), Asn1.GENERALIZED_TIME, "genTime"));
             } catch (RuntimeException e) {

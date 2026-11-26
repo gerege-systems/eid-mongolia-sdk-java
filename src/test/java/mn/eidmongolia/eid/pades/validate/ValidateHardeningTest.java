@@ -425,6 +425,6 @@ public class ValidateHardeningTest {
 
     @Test
     public void oversizedSerialAndRsaKeysAreBounded() {
-        assertTrue(VCrypto.MAX_SERIAL_BITS == 159 && VCrypto.MAX_RSA_BITS == 8192);
+        assertTrue(VCrypto.MAX_SERIAL_BITS == 160 && VCrypto.MAX_RSA_BITS == 8192);
     }
 }
