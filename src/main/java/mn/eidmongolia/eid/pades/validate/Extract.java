@@ -179,11 +179,11 @@ final class Extract {
         Map<Integer, long[]> known = new LinkedHashMap<>();
         Map<Integer, SigMeta> metas = new LinkedHashMap<>();
         // Only signatures that pass integrity count as signature-only extensions (Go extract.go): a revision whose
-        // "signature" does not verify is classified DSS-only and rejected. name — matched against the stamp's /Name.
+        // "signature" does not verify is classified DSS-only and rejected.
         for (RawSignature s : sigs) {
             if (!s.malformed && s.integrity) {
                 known.put(s.objNum, s.byteRange);
-                metas.put(s.objNum, new SigMeta(1, "", s.claimedRoles.size() <= 1, sealCertificateDer(s.leaf), certDisplayName(s.leaf)));
+                metas.put(s.objNum, new SigMeta(1, "", s.claimedRoles.size() <= 1, sealCertificateDer(s.leaf)));
             }
         }
         for (Map.Entry<Integer, SigMeta> e : metas.entrySet()) {
@@ -211,15 +211,6 @@ final class Extract {
     }
 
     /** TS sealCertificateDER: an e-Seal certificate (not CA, nonRepudiation without digitalSignature, no EKU). */
-    /** Go certDisplayName: the DER certificate's display name (GIVENNAME SURNAME, else CN); "" when it does not parse. */
-    static String certDisplayName(byte[] der) {
-        if (der == null) return "";
-        try {
-            return Evaluate.displayName(VCrypto.cert(der));
-        } catch (RuntimeException e) {
-            return "";
-        }
-    }
 
     static boolean sealCertificateDer(byte[] der) {
         if (der == null) return false;
