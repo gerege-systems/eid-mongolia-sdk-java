@@ -82,8 +82,8 @@ public final class Engine {
                 status = new Evaluate.OnlineStatus(new Fetch(t), status, now);
             }
             Evaluate.Evaluator ev = new Evaluate.Evaluator(roots, inter, issuers, status, now);
-            PdfReport rep = new PdfReport();
-            try {
+        PdfReport rep = new PdfReport();
+        try {
             for (Extract.RawSignature r : ex.sigs) {
                 PdfReport.SignatureReport s = ev.evaluateSignature(r);
                 if (s.chainTrusted && r.leaf != null) {
