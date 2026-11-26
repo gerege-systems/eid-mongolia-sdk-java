@@ -13,7 +13,7 @@ public final class Sig {
     private static final Map<String, String> NAMES = new HashMap<>();
     private static final Map<String, String> DIGESTS = new HashMap<>();
 
-    public static {
+    static {
         NAMES.put("1.2.840.113549.1.1.5", "SHA1withRSA");
         NAMES.put("1.2.840.113549.1.1.11", "SHA256withRSA");
         NAMES.put("1.2.840.113549.1.1.12", "SHA384withRSA");
