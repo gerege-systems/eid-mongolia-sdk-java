@@ -39,7 +39,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.2.0")
+    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.3.0")
 }
 ```
 
@@ -52,7 +52,7 @@ Maven：
 <dependency>
   <groupId>com.github.gerege-systems</groupId>
   <artifactId>eid-mongolia-sdk-java</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
@@ -450,7 +450,7 @@ cookie）；使用 `insecureCookie`、`cookieDomain` 或其他 `cookiePath` 时�
 
 ### 支持矩阵（与 Go / TypeScript SDK 对比）
 
-| 功能 | Java 0.2.0 |
+| 功能 | Java 0.3.0 |
 |---|---|
 | 客户端、mTLS、错误、每天与线上 discovery 对照的路由表 | ✓ |
 | 认证推送 / device link、QR ticker、ACSP_V2、interactions | ✓ |
