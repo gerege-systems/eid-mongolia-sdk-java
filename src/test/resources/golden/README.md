@@ -68,6 +68,22 @@ reference-тэй **ижил байт** гаргаж байгааг шалган�
   output (`case:…`, re-signed: new TSA fixtures `http/48…61`); `outSha256` changes for all 40 completed cases, the 4
   error cases are unchanged. Removed fixtures: `POST http://ocsp.pki.test/03` and the 14 superseded TSA responses.
   Regenerated with `go test ./pades -run Golden -update` on the CI runner (PR #61).
+- **v12** (`pades-golden-v12`, APPEARANCE_SPEC.md §6 — organisation seal stamp): all v11 cases, outputs and HTTP
+  fixtures are byte-identical. New signer `pki/seal.pem` / `seal.key.pem` (TEST ONLY Golden Org LLC, issued by 04, RSA-2048,
+  keyUsage = nonRepudiation only, no EKU → an e-Seal certificate by §6.1; `expect.signature` = RSA PKCS#1 v1.5 with that
+  key). Cases carry `"signer": "seal"` (absent = `pki/citizen.pem`): `seal-visible` (unsigned 2-page contract, the
+  SealPDF automatic request 356, 36, 220 × 64 → moved off the footer), `seal-visible-en` (`lang: en`, 1 page),
+  `seal-visible-third` (citizen + citizen (`libreoffice-contract-visible-second`) + seal, stacked above both citizen
+  stamps). Generated with `go test ./pades -run '^TestGolden$' -update` on the CI runner (PR #65).
+- **v13** (`pades-golden-v13`, APPEARANCE_SPEC.md §6.5 seal stamp with QR, §6.6 docId): all v12 cases, outputs and HTTP
+  fixtures are byte-identical. Cases with `"sealQr": true` draw the QR seal stamp (an unexported Prepare option — no
+  public writer emits it yet; ports enable the variant internally for exactly these cases): `seal-qr-visible` (unsigned
+  2-page contract, no verify page, `docId` from options, mn), `seal-qr-visible-en` (1 page), `seal-qr-rotated90`
+  (`/Rotate 90`), `citizen-then-seal-qr` (on `quartz-pdf13-visible`; docId from its verify page, rev 2). Citizen after
+  a seal (§6.6): `seal-qr-then-citizen` (no `docId` in options — taken from the seal stamp's `/EIDVerify` marker),
+  `sealv12-then-citizen` (on the QR-less `seal-visible`: nothing to find, `docId` from options — required, no random
+  docId on a signed document; the two stamps carry different docIds); and `seal-qr-then-seal-qr` (en). Generated with `go test ./pades -run '^TestGolden$' -update` on the
+  CI runner (PR #68).
 - `placement/` — scanner conformance: `vectors.json` (exact occupancy box list + chosen position per input/request) and
   `placement/input/*.pdf` (one fixture per scanner rule). Native SDKs sync this folder too.
 - `ci/pyhanko_check.py` — гаралт бүрийг pyHanko-оор (CI job `golden-external`, qpdf `--check`-тэй хамт) шалгана.
