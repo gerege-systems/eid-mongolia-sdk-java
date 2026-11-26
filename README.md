@@ -170,7 +170,7 @@ revocationSoftFail)` — null бол шигтгэсэн үндэсний root + 
 ## RP-API клиент (`mn.eidmongolia.eid`)
 
 Бүрэн relying-party SDK — Go ба TypeScript SDK-тэй ижил хүрээ, ижил wire зан төлөв (cross-SDK conformance корпус
-`rp-conformance/1`: wire, validator, OCSP, ACSP, interactions; нэвтрэх товчны backend-д `eidlogin/1`). Бүх дуудлага
+`rp-conformance/2`: wire, validator, OCSP, ACSP, interactions; нэвтрэх товчны backend-д `eidlogin/2`). Бүх дуудлага
 блоклоно (virtual thread-д тохиромжтой); `Thread.interrupt()` явж буй дуудлагыг цуцална (`EidException.Network#cancelled`).
 
 ### Клиент, trust ба mTLS
@@ -286,7 +286,8 @@ PdfSignatureRegistered reg = eid.pdf().registerSignature(done.registration(s.ses
 - `person()` (PKI_READ): `certificates`, `devices`, `activity(etsi, ActivityQuery)`, `summary`, `children`.
 - `seal()`: `certificate`, `requestCertificate`, `certificateRequest`, `waitForCertificate`, `requestGrant`,
   `grantStatus`, `waitForGrant`, `seal(orgEtsi, digest, hash)` — буцсан ECDSA гарын үсгийг e-Seal гэрчилгээгээр
-  шалгана; `isSealCertificate`.
+  шалгана; `sealForDocument(orgEtsi, digest, docId, revIndex)` (QR-тэй тамганы нөөц), `registerSealedPdf(orgEtsi,
+  registration)` («PDF-д тамга дарах»-ыг үз); `isSealCertificate`.
 - `token()`: `issueCertificate`, `previewCertificate`, `certificateResult`, `certificateInfo`, `authChallenge`,
   `authVerify` (r‖s гарын үсэг ба гэрчилгээг илгээхээс өмнө validator-ийн гинжээр шалгана), static
   `verifyTokenCertificates`, `tokenAuthDigest`, `tokenLimitOf`.
@@ -326,7 +327,25 @@ e-Seal гэрчилгээ (KeyUsage = зөвхөн nonRepudiation, EKU-гүй) �
 - Гарын үсэгтэй баримтын `docId` (APPEARANCE_SPEC §6.6, golden v13): verify хуудас, эс бөгөөс байгууллагын тамганы
   QR-тэй дардасны `/EIDVerify` тэмдэг, эс бөгөөс `PrepareOptions.docId`; олдсонтой зөрвөл `REQUEST_INVALID` (үл
   харагдах гарын үсэгт ч). Гарын үсэгтэй баримтад санамсаргүй docId үүсгэхгүй (өмнөх шиг). QR-тэй тамганы дардсыг
-  (§6.5) энэ SDK Go-той адил одоохондоо гаргахгүй — CA / TS шалгагч хүлээн авах хүртэл (golden-аар л шалгагдсан).
+  (§6.5) зөвхөн хүсвэл (`SealOptions.qr`, доор) гаргана.
+
+**QR-тэй тамганы дардас ба тамганы бүртгэл (CA V158, Go / TS-тэй ижил):**
+
+```java
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder()
+    .qr(true)                       // дардас /verify/<docId>/<revIndex> руу QR-тэй; байрлалыг тамгалахдаа нөөцөлнө
+    .fileName("Нэхэмжлэх.pdf")      // заавал биш, /verify-д харагдана (≤ 120 тэмдэгт)
+    .build());
+PdfSignatureRegistered reg = eid.seal().registerSealedPdf("NTRMN-1234567", sealed.sealRegistration()); // 7 хоногийн дотор
+```
+
+`qr(true)`-д `DocumentSealer` заавал (`eid.seal()` мөн; энгийн `Sealer` → `REQUEST_INVALID`), `invisible(true)`-тэй хамт
+болохгүй, `(docId, revIndex)`-ийг `sealForDocument`-оор зөвхөн QR-тэй дардас бодитоор зурагдсан үед нөөцөлнө. Verify
+хуудас / QR-тэй тамгагүй гарын үсэгтэй баримтад `SealOptions.docId` заавал. `Completed.sealRegistration()` нь
+`POST /seal/{orgEtsi}/registrations`-ийн биеийг (QR-гүй тамганд ч) бүтээнэ; `registerSealedPdf` илгээхээс өмнө шалгана
+(`IllegalArgumentException`), 201 → `created()` true, ижил биеийн давталт 200 → false, `PRIOR_MISMATCH`-д
+`pdf().registerSignature`-тэй ижил хослолоор дахин оролдоно, CA-ийн кодууд `EidErrorCodes.SEAL_REGISTER` (төрөлжсөн
+`SealNotFound`, `SealDocMismatch`, `DocIdReserved`). `qr`-гүй гаралт өмнөхтэйгөө байт-ижил.
 
 ### Гарын үсэгтэй PDF шалгах (`EidPades.validatePdf`)
 
@@ -349,7 +368,7 @@ inflate / xref гинжийн дээд хязгаар.
 
 ### «eID-ээр нэвтрэх» товчны backend (`mn.eidmongolia.eid.login`)
 
-Хөтчийн `<eid-login-button>` (TS SDK) ашигладаг backend — Go `eidlogin` / TS `createEidLogin`-тэй ижил JSON, cookie, статус код (conformance `eidlogin/1`-ийн 24 сценари). `EidLogin.handle(EidLoginRequest)` нь framework-аас хамааралгүй; JDK серверт `EidLoginHttpHandler`, Servlet / Spring-д доорх жишээ. Push нь бүртгэлтэй эсэхийг задлахгүй (decoy, 1 с доод хугацаа), cookie нь HttpOnly + Secure + SameSite=Lax, төлөв серверт (`EidLoginStore`, анхдагч санах ой), OCSP цуцлалт анхдагчаар (soft-fail — дээрхийг үз).
+Хөтчийн `<eid-login-button>` (TS SDK) ашигладаг backend — Go `eidlogin` / TS `createEidLogin`-тэй ижил JSON, cookie, статус код (conformance `eidlogin/2`-ийн 34 сценари). `EidLogin.handle(EidLoginRequest)` нь framework-аас хамааралгүй; JDK серверт `EidLoginHttpHandler`, Servlet / Spring-д доорх жишээ. Push нь бүртгэлтэй эсэхийг задлахгүй (decoy, 1 с доод хугацаа), cookie нь HttpOnly + Secure + SameSite=Lax, төлөв серверт (`EidLoginStore`, анхдагч санах ой), OCSP цуцлалт анхдагчаар (soft-fail — дээрхийг үз).
 
 ```java
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: үндэсний root-тэй TrustConfig)
@@ -422,9 +441,16 @@ EidLogin login = EidLogin.builder(eid)
 > гинж) нэг хуваалцсан `start:unknown` хувинд тоологдоно; IPv6 клиентийг /64-өөр нь түлхүүрлэнэ. IP-ийн эх сурвалж огт
 > байхгүй бол IP-ийн хязгаар унтарч, нэг удаа анхааруулга бичигдэнэ.
 
-Дугаар тутмын push хязгаар (дугаарт минутад 3) зөвхөн дугаараар түлхүүрлэгдэнэ: иргэний регистрийн дугаарыг мэдсэн хэн ч
-цонхыг дуусгаж тэр иргэний **push** нэвтрэлтийг минут хүртэл хойшлуулж чадна — дугаараар push хийхийн мөн чанар; QR ба
+Дугаар тутмын push хязгаар (дугаарт минутад 3)-ын түлхүүр нь `push:<pushKey>` — дугаарын аудитын HMAC (`auditKey`;
+хязгаарлагч хуваалцдаг instance бүрд ижил түлхүүр өг), дугаар өөрөө биш: өөрийн `rateLimit` hook эсвэл Redis-д
+регистрийн дугаар хадгалагдахгүй (0.2.0 `push:<id>` дамжуулдаг байв). Иргэний регистрийн дугаарыг мэдсэн хэн ч цонхыг
+дуусгаж тэр иргэний **push** нэвтрэлтийг минут хүртэл хойшлуулж чадсаар — дугаараар push хийхийн мөн чанар; QR ба
 Web2App-д нөлөөлөхгүй.
+
+Нэвтрэх cookie-ийн анхдагч нэр `__Host-eid_login` (Secure, Domain алга, Path `/` — хөтөч энэ нэрийг дэд домэйн / өөр
+замаас хүлээн авахгүй); `insecureCookie`, `cookieDomain` эсвэл өөр `cookiePath` бол анхдагч `eid_login` хэвээр,
+`cookieName(...)`-ийг өгсөн ёсоор нь. Нэвтрэх cookie нэгээс олон ирсэн хүсэлтийг cookie-гүй гэж үзнэ (status `EXPIRED`,
+callback `eid_error=expired`). 0.2.0-оос шинэчлэхэд явагдаж буй нэвтрэлтүүд нэг удаа дахин эхэлнэ.
 
 ### Дэмжлэгийн хүснэгт (Go / TypeScript SDK-тэй харьцуулбал)
 
@@ -441,9 +467,9 @@ Web2App-д нөлөөлөхгүй.
 | Нэвтрэх товчны backend (JDK adapter; Servlet / Spring жишээ) | ✓ |
 | PAdES prepare / complete / suggestPlacement / бүртгэлийн бие | ✓ |
 | `sealPdf` (харагдах тамганы дардас — анхдагч, үл харагдах) | ✓ (golden v12) |
-| QR-тэй тамганы дардас, гарын үсэгтэй баримтын docId дүрэм | ✓ golden v13 (QR-тэй дардас Go-той адил нийтэд нээгдээгүй) |
+| QR-тэй тамганы дардас (`SealOptions.qr`), гарын үсэгтэй баримтын docId дүрэм | ✓ golden v13 |
 | ValidatePDF (гарын үсэгтэй PDF шалгах) | ✓ |
-| Тамганы бүртгэл (`POST /v3/seal/{org}/registrations`) | хараахан үгүй (ямар ч SDK-д алга) |
+| Тамганы бүртгэл (`POST /seal/{orgEtsi}/registrations`, `sealForDocument`) | ✓ |
 
 ### 0.1.x-ээс шилжих
 

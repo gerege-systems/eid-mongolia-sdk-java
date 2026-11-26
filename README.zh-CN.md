@@ -169,8 +169,8 @@ revocationSoftFail)`——为 null 时使用内置的国家 root + 02–05、颁
 
 ## RP-API 客户端（`mn.eidmongolia.eid`）
 
-完整的依赖方（relying-party）SDK——范围与线上行为同 Go 和 TypeScript SDK（跨 SDK 一致性语料 `rp-conformance/1`：
-wire、validator、OCSP、ACSP、interactions；登录按钮后端为 `eidlogin/1`）。所有调用都是阻塞的（适合虚拟线程）；
+完整的依赖方（relying-party）SDK——范围与线上行为同 Go 和 TypeScript SDK（跨 SDK 一致性语料 `rp-conformance/2`：
+wire、validator、OCSP、ACSP、interactions；登录按钮后端为 `eidlogin/2`）。所有调用都是阻塞的（适合虚拟线程）；
 `Thread.interrupt()` 会取消正在进行的调用（`EidException.Network#cancelled`）。
 
 ### 客户端、trust 与 mTLS
@@ -284,7 +284,8 @@ revIndex 不在 1…16、手机签名缺少 sessionID …）会在发出任何�
 - `person()`（PKI_READ）：`certificates`、`devices`、`activity(etsi, ActivityQuery)`、`summary`、`children`。
 - `seal()`：`certificate`、`requestCertificate`、`certificateRequest`、`waitForCertificate`、`requestGrant`、
   `grantStatus`、`waitForGrant`、`seal(orgEtsi, digest, hash)`——用 e-Seal 证书验证返回的 ECDSA 签名；
-  `isSealCertificate`。
+  `sealForDocument(orgEtsi, digest, docId, revIndex)`（带 QR 印章的预留）、`registerSealedPdf(orgEtsi, registration)`
+  （见「为 PDF 加盖电子印章」）；`isSealCertificate`。
 - `token()`：`issueCertificate`、`previewCertificate`、`certificateResult`、`certificateInfo`、`authChallenge`、
   `authVerify`（发送前用 validator 的证书链检查 r‖s 签名与证书），静态方法 `verifyTokenCertificates`、
   `tokenAuthDigest`、`tokenLimitOf`。
@@ -322,7 +323,24 @@ Placement where = sealed.placement();   // null = 不可见
   会把之前的签名报告为已修改——在它们更新之前请使用 `invisible(true)`（其输出与 0.2.0 逐字节相同）。
 - 已签名文档的 `docId`（APPEARANCE_SPEC §6.6，golden v13）：verify 页；否则带 QR 的机构印章图案的 `/EIDVerify` 标记；
   否则 `PrepareOptions.docId`；与已找到的 docId 不一致则 `REQUEST_INVALID`（不可见签名亦然）。已签名文档不会生成随机
-  docId（与之前相同）。与 Go 一样，本 SDK 暂不输出带 QR 的印章图案（§6.5）——须待 CA / TS 验证器支持（目前仅由 golden 验证）。
+  docId（与之前相同）。仅在要求时（`SealOptions.qr`，见下）输出带 QR 的印章图案（§6.5）。
+
+**带 QR 的印章图案与印章登记（CA V158，与 Go / TS 相同）：**
+
+```java
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder()
+    .qr(true)                       // 图案带指向 /verify/<docId>/<revIndex> 的 QR；盖章时预留该位置
+    .fileName("Invoice.pdf")        // 可选，显示在 /verify（≤ 120 个字符）
+    .build());
+PdfSignatureRegistered reg = eid.seal().registerSealedPdf("NTRMN-1234567", sealed.sealRegistration()); // 7 天内
+```
+
+`qr(true)` 需要 `DocumentSealer`（`eid.seal()` 即是；普通 `Sealer` → `REQUEST_INVALID`），不能与 `invisible(true)` 同用，且仅在
+实际绘制了带 QR 的图案时才通过 `sealForDocument` 预留 `(docId, revIndex)`。没有 verify 页 / 带 QR 印章的已签名文档需提供
+`SealOptions.docId`。`Completed.sealRegistration()` 生成 `POST /seal/{orgEtsi}/registrations` 的请求体（无 QR 的印章亦可）；
+`registerSealedPdf` 在发送前校验（`IllegalArgumentException`），201 → `created()` 为 true，相同请求体的幂等重放 200 → false，
+`PRIOR_MISMATCH` 时与 `pdf().registerSignature` 相同地重试各种组合，CA 错误码见 `EidErrorCodes.SEAL_REGISTER`（类型化的
+`SealNotFound`、`SealDocMismatch`、`DocIdReserved`）。不使用 `qr` 时输出与之前逐字节相同。
 
 ### 验证已签名的 PDF（`EidPades.validatePdf`）
 
@@ -344,7 +362,7 @@ inflate / xref 链限制。
 
 ### “使用 eID 登录”按钮后端（`mn.eidmongolia.eid.login`）
 
-浏览器 `<eid-login-button>`（TS SDK）的后端——JSON、cookie 与状态码同 Go `eidlogin` / TS `createEidLogin`（通过 `eidlogin/1` 一致性语料的全部 24 个场景）。`EidLogin.handle(EidLoginRequest)` 与框架无关；JDK 服务器用 `EidLoginHttpHandler`，Servlet / Spring 见下例。推送不会泄露号码是否已注册（诱饵会话、1 秒下限）；cookie 为 HttpOnly + Secure + SameSite=Lax；状态保存在服务器（`EidLoginStore`，默认内存）；默认启用 OCSP 吊销检查（soft-fail——见上文）。
+浏览器 `<eid-login-button>`（TS SDK）的后端——JSON、cookie 与状态码同 Go `eidlogin` / TS `createEidLogin`（通过 `eidlogin/2` 一致性语料的全部 34 个场景）。`EidLogin.handle(EidLoginRequest)` 与框架无关；JDK 服务器用 `EidLoginHttpHandler`，Servlet / Spring 见下例。推送不会泄露号码是否已注册（诱饵会话、1 秒下限）；cookie 为 HttpOnly + Secure + SameSite=Lax；状态保存在服务器（`EidLoginStore`，默认内存）；默认启用 OCSP 吊销检查（soft-fail——见上文）。
 
 ```java
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient（trust：含国家根证书的 TrustConfig）
@@ -415,8 +433,14 @@ EidLogin login = EidLogin.builder(eid)
 > `X-Forwarded-For` 自选限流键。无法推导出的地址（代理链比配置的短）计入一个共享的 `start:unknown` 桶；IPv6 客户端按其
 > /64 前缀计数。完全没有 IP 来源时按 IP 的限流关闭，并记录一次警告。
 
-按号码的 push 限流（每个号码每分钟 3 次）仅以号码为键：任何知道公民身份号的人都可以耗尽该窗口，使该公民的 **push** 登录
-最多延迟一分钟——这是按号码推送的固有特性；QR 与 Web2App 不受影响。
+按号码的 push 限流（每个号码每分钟 3 次）的键为 `push:<pushKey>`——号码的审计 HMAC（`auditKey`；共享限流器的各实例请设置相同的
+密钥），而不是号码本身：自定义 `rateLimit` 钩子或 Redis 中不会保存身份号（0.2.0 传入 `push:<id>`）。任何知道公民身份号的人
+仍可耗尽该窗口，使该公民的 **push** 登录最多延迟一分钟——这是按号码推送的固有特性；QR 与 Web2App 不受影响。
+
+登录 cookie 的默认名称为 `__Host-eid_login`（Secure、无 Domain、Path 为 `/`——浏览器不会接受来自兄弟子域或其他路径的同名
+cookie）；使用 `insecureCookie`、`cookieDomain` 或其他 `cookiePath` 时默认仍为 `eid_login`，`cookieName(...)` 按原样使用。
+请求中登录 cookie 出现不止一次时视为没有 cookie（status `EXPIRED`，callback `eid_error=expired`）。从 0.2.0 升级时，进行中的
+登录会重新开始一次。
 
 ### 支持矩阵（与 Go / TypeScript SDK 对比）
 
@@ -433,9 +457,9 @@ EidLogin login = EidLogin.builder(eid)
 | 登录按钮后端（JDK 适配器；Servlet / Spring 示例） | ✓ |
 | PAdES prepare / complete / suggestPlacement / 登记请求体 | ✓ |
 | `sealPdf`（可见印章图案——默认，不可见） | ✓（golden v12） |
-| 带 QR 的印章图案、已签名文档的 docId 规则 | ✓ golden v13（带 QR 的印章图案与 Go 一样未公开） |
+| 带 QR 的印章图案（`SealOptions.qr`）、已签名文档的 docId 规则 | ✓ golden v13 |
 | ValidatePDF（验证已签名 PDF） | ✓ |
-| 印章登记（`POST /v3/seal/{org}/registrations`） | 尚未支持（目前任何 SDK 都没有） |
+| 印章登记（`POST /seal/{orgEtsi}/registrations`、`sealForDocument`） | ✓ |
 
 ### 从 0.1.x 迁移
 

@@ -68,7 +68,7 @@ public class EidLoginHttpHandlerTest {
             assertEquals("qr", b.get("mode"));
             assertTrue(((String) b.get("qr")).startsWith("https://eid.conformance.test/dl?"));
             String setCookie = s.headers().firstValue("Set-Cookie").orElse("");
-            assertTrue(setCookie, setCookie.startsWith("eid_login=" + EidLoginSecurityTest.SID + ".") && setCookie.contains("HttpOnly")
+            assertTrue(setCookie, setCookie.startsWith("__Host-eid_login=" + EidLoginSecurityTest.SID + ".") && setCookie.contains("HttpOnly")
                 && setCookie.contains("Secure") && setCookie.contains("SameSite=Lax"));
             assertEquals("the socket peer is the client IP (the stalled request never reached the limiter)", List.of("start:127.0.0.1"), keys);
 

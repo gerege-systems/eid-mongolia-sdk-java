@@ -178,11 +178,13 @@ public final class EidQr {
             throw err(EidQrException.HEADER_INVALID, "x5c is not a certificate");
         }
 
-        // 4. Chain + leaf profile. Cross-SDK hardening first (stricter than Go / TS): one SERIALNUMBER and one CN at most —
-        // the identity must not depend on which duplicate a parser picks.
+        // 4. Chain + leaf profile. rp-conformance/2 first (Go qrChain): no weak RSA key in x5c, then one SERIALNUMBER and one
+        // CN at most — the identity must not depend on which duplicate a parser picks.
+        if (leaf.weakRsaKey()) throw err(EidQrException.CHAIN_INVALID, "weak RSA key (" + leaf.serialRef() + ")");
         if (leaf.subjectAttrCount(Cert.OID_SERIAL_NUMBER) > 1 || leaf.subjectAttrCount(Cert.OID_COMMON_NAME) > 1) {
             throw err(EidQrException.CHAIN_INVALID, "subject has more than one SERIALNUMBER or CN (" + leaf.serialRef() + ")");
         }
+        if (inter.weakRsaKey()) throw err(EidQrException.CHAIN_INVALID, "x5c[1] weak RSA key (" + inter.serialRef() + ")");
         Cert issuer = checkChain(leaf, inter, t, now);
 
         // 5. Revocation.
@@ -321,7 +323,7 @@ public final class EidQr {
             }
             Integer pathLen = c.maxPathLen();
             if (pathLen != null && i - 1 > pathLen) throw err(EidQrException.CHAIN_INVALID, "pathLenConstraint exceeded (" + c.serialRef() + ")");
-            if (c.isRsa() && c.rsaBits() < MIN_RSA_BITS) throw err(EidQrException.CHAIN_INVALID, "CA RSA key < 2048 (" + c.serialRef() + ")");
+            if (c.weakRsaKey()) throw err(EidQrException.CHAIN_INVALID, "CA RSA key weak (" + c.serialRef() + ")");
         }
         for (Cert c : path) {
             if (!validWithSkew(c, now)) throw err(EidQrException.CHAIN_INVALID, "certificate not valid now (" + c.serialRef() + ")");
@@ -336,7 +338,8 @@ public final class EidQr {
         List<String> allowed = new ArrayList<>();
         List<String> src = t.allowedIssuerSkis() != null && !t.allowedIssuerSkis().isEmpty() ? t.allowedIssuerSkis() : List.of(CITIZEN_ISSUING_CA_SKI);
         for (String s : src) allowed.add(s.replace(":", "").toLowerCase(Locale.ROOT));
-        byte[] ski = issuer.subjectKeyId();
+        // The found issuer's SKI (or its method-1 key id when it has none) — never the leaf's own AKI (Go qrChain v2).
+        byte[] ski = issuer.keyIdentifier();
         if (ski.length == 0 || !allowed.contains(Text.hex(ski))) throw err(EidQrException.CHAIN_INVALID, "issuing CA not allowed");
         if (!(leaf.publicKey() instanceof RSAPublicKey) || ((RSAPublicKey) leaf.publicKey()).getModulus().bitLength() < MIN_RSA_BITS) {
             throw err(EidQrException.CHAIN_INVALID, "not an RSA ≥ 2048 key");

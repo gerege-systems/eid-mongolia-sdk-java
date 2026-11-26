@@ -99,6 +99,10 @@ public final class EidPades {
      * Validators released BEFORE the seal stamp (older CA / TS SDK) do not recognise it and report the earlier signatures
      * as modified — use {@code invisible(true)} until they are updated.
      *
+     * <p>{@link SealOptions#qr()} draws the stamp with a QR to {@code /verify/<docId>/<revIndex>} and reserves that position
+     * through {@link DocumentSealer#sealForDocument} (only when the QR stamp is actually drawn). Register the result with
+     * {@link Completed#sealRegistration()} and {@code EidClient.seal().registerSealedPdf} (Go: CA V158).
+     *
      * @throws EidPadesException SIGNER_INVALID — the certificate is not an e-Seal one, or the organisation's seal
      *     certificate changed between the two calls; the {@link #prepare} / {@link #complete} codes
      * @throws mn.eidmongolia.eid.EidException the {@link Sealer}'s errors unchanged (403 — no SEAL right; 429 — retryable;
@@ -112,6 +116,15 @@ public final class EidPades {
         Objects.requireNonNull(pdf, "pdf");
         if (sealer == null) throw new EidPadesException.RequestInvalid("Sealer null");
         SealOptions o = options == null ? SealOptions.builder().build() : options;
+        if (o.qr() && o.invisible()) throw new EidPadesException.RequestInvalid("qr and invisible cannot be combined");
+        if (o.qr() && !(sealer instanceof DocumentSealer)) {
+            throw new EidPadesException.RequestInvalid("a QR seal stamp needs a DocumentSealer (EidClient.seal()) — the docId / revIndex reservation");
+        }
+        String fileName = null;
+        if (o.fileName() != null && !o.fileName().isEmpty()) {
+            fileName = Pades.cleanFileName(o.fileName());
+            if (fileName == null) throw new EidPadesException.RequestInvalid("fileName ≤ 120 characters");
+        }
         mn.eidmongolia.eid.SealCertificate sc = sealer.certificate(orgEtsi);
         byte[] der = sc == null ? new byte[0] : sc.certificate();
         mn.eidmongolia.eid.internal.Cert cert;
@@ -124,7 +137,7 @@ public final class EidPades {
             throw new EidPadesException.SignerInvalid("not an e-Seal certificate (KeyUsage must be nonRepudiation only)");
         }
         PrepareOptions.Builder pb = PrepareOptions.builder(cert.raw).chain(o.chain()).signerName(o.signerName()).reason(o.reason())
-            .signingTime(o.signingTime());
+            .signingTime(o.signingTime()).docId(o.docId()).fileName(fileName).sealQr(o.qr());
         boolean auto = false;
         if (!o.invisible()) {
             SignatureAppearance a = o.appearance();
@@ -135,16 +148,36 @@ public final class EidPades {
             pb.appearance(a);
         }
         Prepared p;
+        PrepareOptions po = pb.build();
         try {
-            p = prepare(pdf, pb.build());
+            p = prepare(pdf, po);
         } catch (EidPadesException e) {
             String code = e.code();
             if (!auto || !code.equals("REQUEST_INVALID") && !code.equals("PDF_TOO_LARGE")) throw e;
             // The automatic stamp does not fit the page (text, box), or its ~82 KB of fonts push the output over the size
             // limit — the caller asked for nothing, so the invisible seal (APPEARANCE_SPEC.md §6.4).
-            p = prepare(pdf, pb.appearance(null).build());
+            po = pb.appearance(null).build();
+            p = prepare(pdf, po);
         }
-        mn.eidmongolia.eid.SealResult r = sealer.seal(orgEtsi, p.dtbs(), mn.eidmongolia.eid.HashAlgorithm.SHA_256);
+        String docId = p.docId() == null || p.docId().isEmpty() ? null : p.docId();
+        if (o.qr() && docId == null) {
+            // A signed document without a verify page / QR seal stamp and no SealOptions.docId — no docId to draw or register.
+            throw new EidPadesException.RequestInvalid("a QR seal stamp needs a docId (SealOptions.docId)");
+        }
+        mn.eidmongolia.eid.SealResult r;
+        if (o.qr() && po.appearance() != null) {
+            // The QR stamp was drawn: reserve /verify/<docId>/<revIndex> while sealing (CA V158; the registration must match —
+            // SEAL_DOC_MISMATCH). Go pades/seal.go SealPDF.
+            int revIndex;
+            try {
+                revIndex = PrepState.decode(p.stateRaw()).revIndex;
+            } catch (RuntimeException e) {
+                throw new EidPadesException.StateInvalid("state does not decode");
+            }
+            r = ((DocumentSealer) sealer).sealForDocument(orgEtsi, p.dtbs(), docId, revIndex);
+        } else {
+            r = sealer.seal(orgEtsi, p.dtbs(), mn.eidmongolia.eid.HashAlgorithm.SHA_256);
+        }
         if (r == null || !java.util.Arrays.equals(r.certificate(), cert.raw)) {
             throw new EidPadesException.SignerInvalid("the organisation's seal certificate changed while sealing — try again");
         }

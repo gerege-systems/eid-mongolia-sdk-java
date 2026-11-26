@@ -67,6 +67,8 @@ final class Routes {
     /** CA !483 (ORG_ONBOARDING §4.3); discovery: endpoints.seal.certificate_request. */
     static final Route SEAL_CERTIFICATE_REQUEST_STATUS = new Route("GET", "/seal/certificate/{orgEtsi}/requests/{requestId}");
     static final Route SEAL = new Route("POST", "/seal/{orgEtsi}");
+    /** Organisation-seal PAdES registration (CA V158); discovery: endpoints.seal.registration. */
+    static final Route SEAL_REGISTRATIONS = new Route("POST", "/seal/{orgEtsi}/registrations");
     /** RP-initiated seal grant request (CA V156); discovery: endpoints.seal.grants, organization.seal_grants. */
     static final Route SEAL_GRANTS = new Route("POST", "/seal/grants");
     static final Route SEAL_GRANT_STATUS = new Route("GET", "/seal/grants/{grantId}");
@@ -89,7 +91,7 @@ final class Routes {
         TOKEN_CERTIFICATE, TOKEN_CERTIFICATE_RESULT,
         TOKEN_AUTH_CHALLENGE, TOKEN_AUTH_VERIFY,
         SHARE,
-        SEAL_CERTIFICATE, SEAL_CERTIFICATE_REQUEST, SEAL_CERTIFICATE_REQUEST_STATUS, SEAL,
+        SEAL_CERTIFICATE, SEAL_CERTIFICATE_REQUEST, SEAL_CERTIFICATE_REQUEST_STATUS, SEAL, SEAL_REGISTRATIONS,
         SEAL_GRANTS, SEAL_GRANT_STATUS, ORG_SEAL_GRANTS);
 
     /**
