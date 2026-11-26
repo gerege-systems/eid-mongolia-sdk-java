@@ -1,7 +1,6 @@
 package mn.eidmongolia.eid.pades.validate;
 
 import java.io.ByteArrayOutputStream;
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -109,8 +108,14 @@ final class DReader {
     private static final int MAX_DEPTH = 512;
     /** Per-stream inflate limit (TS zlibInflate default). */
     private static final int MAX_STREAM = 64 << 20;
-    /** Total inflate budget of one reader. */
-    private static final long MAX_INFLATE_TOTAL = 256L << 20;
+    /** Total bytes one reader may copy or inflate from streams. */
+    private static final long MAX_WORK_TOTAL = 256L << 20;
+    /** Decoded streams kept for re-use (object streams), in bytes. */
+    private static final long MAX_CACHE_BYTES = 64L << 20;
+    /** Object ids a cross-reference section may add (Go writer guard, 2^21). */
+    private static final long MAX_XREF_IDS = 1L << 21;
+    /** Cross-reference sections followed through /Prev. */
+    private static final int MAX_XREF_SECTIONS = 128;
 
     private static boolean isSpace(int c) {
         return c == 0 || c == 9 || c == 10 || c == 12 || c == 13 || c == 32;
@@ -136,8 +141,6 @@ final class DReader {
     private static final Pattern REAL2 = Pattern.compile("^[+-]?[^.]*\\.[^.]*$");
     private static final Pattern DIGIT = Pattern.compile("[0-9]");
     private static final Pattern DOT = Pattern.compile("^[+-]?\\.$");
-    private static final BigInteger I64_MAX = BigInteger.valueOf(Long.MAX_VALUE);
-    private static final BigInteger I64_MIN = BigInteger.valueOf(Long.MIN_VALUE);
 
     /** digitorus lex.go buffer over data[start:]. */
     private static final class Lexer {
@@ -315,9 +318,18 @@ final class DReader {
             if (s.equals("true")) return Boolean.TRUE;
             if (s.equals("false")) return Boolean.FALSE;
             if (INT.matcher(s).matches()) {
-                BigInteger v = new BigInteger(s.startsWith("+") ? s.substring(1) : s);
-                if (v.compareTo(I64_MAX) > 0 || v.compareTo(I64_MIN) < 0) throw new PdfError("invalid integer " + s);
-                return v.longValue();
+                // Bounded: digit strings longer than any int64 are rejected before parsing (a huge token must not cost
+                // quadratic BigInteger work). Same outcome as TS (out of int64 range → error).
+                boolean neg = s.startsWith("-");
+                int z = s.startsWith("+") || neg ? 1 : 0;
+                while (z < s.length() - 1 && s.charAt(z) == '0') z++;
+                String digits = s.substring(z);
+                if (digits.length() > 19) throw new PdfError("invalid integer");
+                try {
+                    return Long.parseLong(neg ? "-" + digits : digits);
+                } catch (NumberFormatException e) {
+                    throw new PdfError("invalid integer");
+                }
             }
             if (REAL1.matcher(s).matches() && REAL2.matcher(s).matches() && DIGIT.matcher(s).find()) {
                 // JS parseFloat on [+-]?digits.digits — never NaN here (a digit is present).
@@ -531,14 +543,29 @@ final class DReader {
             return data instanceof PStr ? ((PStr) data).b : new byte[0];
         }
 
+        /** The stream's /Length (int64; 0 when absent), without reading it. */
+        long streamLength() {
+            return key("Length").int64();
+        }
+
         /** The decoded stream (digitorus Value.Reader). */
         byte[] streamData() {
+            return streamData(MAX_STREAM);
+        }
+
+        /** The decoded stream, at most [limit] bytes after every filter (else PdfError). */
+        byte[] streamData(int limit) {
             if (!(data instanceof PStream)) throw new PdfError("stream not present");
             PStream x = (PStream) data;
             byte[] cached = decoded.get(x);
-            if (cached != null) return cached;
+            if (cached != null) {
+                if (cached.length > limit) throw new PdfError("stream larger than allowed");
+                return cached;
+            }
             long n = key("Length").int64();
             if (n < 0 || x.offset + n > bytes.length) throw new PdfError("stream length beyond the file");
+            if (n > limit) throw new PdfError("stream larger than allowed");
+            charge(n); // the raw copy counts against the reader's work budget too
             byte[] out = Arrays.copyOfRange(bytes, x.offset, (int) (x.offset + n));
             Value filter = key("Filter");
             Value param = key("DecodeParms");
@@ -546,22 +573,26 @@ final class DReader {
                 case "null":
                     break;
                 case "name":
-                    out = applyFilter(out, filter.name(), param);
+                    out = applyFilter(out, filter.name(), param, limit);
                     break;
                 case "array":
-                    for (int i = 0; i < filter.len(); i++) out = applyFilter(out, filter.index(i).name(), param.index(i));
+                    for (int i = 0; i < filter.len(); i++) out = applyFilter(out, filter.index(i).name(), param.index(i), limit);
                     break;
                 default:
                     throw new PdfError("unsupported filter");
             }
-            if (decoded.size() < 4096) decoded.put(x, out);
+            if (out.length > limit) throw new PdfError("stream larger than allowed");
+            if (decodedBytes + out.length <= MAX_CACHE_BYTES) {
+                decoded.put(x, out);
+                decodedBytes += out.length;
+            }
             return out;
         }
     }
 
-    private byte[] applyFilter(byte[] data, String name, Value param) {
+    private byte[] applyFilter(byte[] data, String name, Value param, int limit) {
         if (!name.equals("FlateDecode")) throw new PdfError("unknown filter " + name);
-        byte[] out = zlibInflate(data);
+        byte[] out = zlibInflate(data, limit);
         Value pred = param.key("Predictor");
         if (pred.kind().equals("null")) return out;
         if (pred.int64() != 12) throw new PdfError("unknown predictor");
@@ -580,7 +611,7 @@ final class DReader {
     }
 
     /** TS zlibInflate: zlib header checked, raw deflate, adler32 NOT required, a truncated stream returns its prefix. */
-    private byte[] zlibInflate(byte[] src) {
+    private byte[] zlibInflate(byte[] src, int limit) {
         if (src.length < 2) throw new PdfError("zlib: no header");
         int cmf = src[0] & 0xff;
         int flg = src[1] & 0xff;
@@ -597,9 +628,8 @@ final class DReader {
                     if (inf.needsInput() || inf.needsDictionary()) break; // truncated: the decoded prefix
                     continue;
                 }
-                if (out.size() + (long) n > MAX_STREAM) throw new PdfError("inflate: size limit");
-                inflated += n;
-                if (inflated > MAX_INFLATE_TOTAL) throw new PdfError("inflate: total budget exceeded");
+                if (out.size() + (long) n > Math.min(limit, MAX_STREAM)) throw new PdfError("inflate: size limit");
+                charge(n);
                 out.write(buf, 0, n);
             }
             return out.toByteArray();
@@ -617,7 +647,15 @@ final class DReader {
     int[] trailerPtr = NO_PTR;
     private final Map<Long, Value> cache = new HashMap<>();
     private final Map<PStream, byte[]> decoded = new java.util.IdentityHashMap<>();
-    private long inflated;
+    private final Map<PStream, Map<Long, Long>> objStmIndexes = new java.util.IdentityHashMap<>();
+    private long work;
+    private long decodedBytes;
+
+    /** Charges [n] bytes of copying / inflating to the reader's total work budget. */
+    private void charge(long n) {
+        work += n;
+        if (work > MAX_WORK_TOTAL) throw new PdfError("PDF work budget exceeded");
+    }
 
     Xref xrefAt(int i) {
         Xref x = xref.get(i);
@@ -673,7 +711,7 @@ final class DReader {
         if (sizeObj == null) throw new PdfError("malformed PDF: xref stream missing Size");
         long size = sizeObj;
         if (size < 0 || size > 1 << 24) throw new PdfError("bad xref Size");
-        List<Xref> table = new ArrayList<>(java.util.Collections.nCopies((int) size, (Xref) null));
+        List<Xref> table = new ArrayList<>(java.util.Collections.nCopies((int) Math.min(size, MAX_XREF_IDS), (Xref) null));
         readXrefStreamData(strm, table, size);
         Set<Long> seen = new HashSet<>();
         Object prevoff = strm.hdr.get("Prev");
@@ -681,6 +719,7 @@ final class DReader {
             if (!(prevoff instanceof Long)) throw new PdfError("malformed PDF: xref Prev is not integer");
             long off = (Long) prevoff;
             if (!seen.add(off)) throw new PdfError("malformed PDF: xref Prev loop detected");
+            if (seen.size() >= MAX_XREF_SECTIONS) throw new PdfError("too many xref sections");
             if (off < 0 || off >= bytes.length) throw new PdfError("bad xref Prev");
             Object pd = new Lexer(bytes, (int) off, false).readObject();
             if (!(pd instanceof ObjDef) || !(((ObjDef) pd).obj instanceof PStream)) throw new PdfError("malformed PDF: xref prev stream not found");
@@ -712,6 +751,7 @@ final class DReader {
             wtotal += w[i];
         }
         if (w.length < 3) throw new PdfError("invalid W array");
+        if (wtotal <= 0) throw new PdfError("invalid W array: empty rows"); // else /Index could loop without reading
         byte[] data = new Value(NO_PTR, strm).streamData();
         int p = 0;
         for (int k = 0; k + 1 < index.size(); k += 2) {
@@ -731,6 +771,8 @@ final class DReader {
                 p = base + wtotal;
                 long x = start + i;
                 if (x < 0) throw new PdfError("xref stream: index out of range");
+                // Never grow the table past 2^21 ids (writer guard, PdfReader): such rows are ignored.
+                if (x >= MAX_XREF_IDS) continue;
                 if (x >= table.size()) {
                     // Go: append(table[:cap], …) grows by the next row only; anything further is out of range.
                     if (x != table.size()) throw new PdfError("xref stream: index out of range");
@@ -764,6 +806,7 @@ final class DReader {
             if (!(prevoff instanceof Long)) throw new PdfError("malformed PDF: xref Prev is not integer");
             long off = (Long) prevoff;
             if (!seen.add(off)) throw new PdfError("malformed PDF: xref Prev loop detected");
+            if (seen.size() >= MAX_XREF_SECTIONS) throw new PdfError("too many xref sections");
             if (off < 0 || off >= bytes.length) throw new PdfError("bad xref Prev");
             Lexer pb = new Lexer(bytes, (int) off, false);
             if (!isKw(pb.readToken(), "xref")) throw new PdfError("malformed PDF: xref Prev does not point to xref");
@@ -797,6 +840,7 @@ final class DReader {
                     || !(((PKeyword) alloc).k.equals("f") || ((PKeyword) alloc).k.equals("n"))) {
                     throw new PdfError("malformed xref table");
                 }
+                if (start + i >= MAX_XREF_IDS) continue; // ids beyond 2^21 ignored (no table growth)
                 int x = (int) (start + i);
                 while (table.size() <= x) table.add(null);
                 Xref cur = table.get(x);
@@ -837,23 +881,16 @@ final class DReader {
                 long first = strm.key("First").int64();
                 if (first == 0) throw new PdfError("missing First");
                 byte[] data = strm.streamData();
-                Lexer b = new Lexer(data, 0, true);
+                Map<Long, Long> index = objStmIndex((PStream) strm.data, data, n);
                 Object found = null;
                 boolean ok = false;
-                for (long i = 0; i < n; i++) {
-                    Object id = b.readToken();
-                    Object off = b.readToken();
-                    if (id == EOF || off == EOF) break;
-                    long idn = id instanceof Long ? ((Long) id) & 0xffffffffL : 0;
-                    if (idn == ptr.id) {
-                        long o = off instanceof Long ? (Long) off : 0;
-                        long at = first + o;
-                        b.pos = at < 0 || at > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) at;
-                        b.unread.clear();
-                        found = asObj(b.readObject());
-                        ok = true;
-                        break;
-                    }
+                Long o = index.get((long) ptr.id & 0xffffffffL);
+                if (o != null) {
+                    Lexer b = new Lexer(data, 0, true);
+                    long at = first + o;
+                    b.pos = at < 0 || at > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) at;
+                    found = asObj(b.readObject());
+                    ok = true;
                 }
                 if (ok) {
                     x = found;
@@ -872,6 +909,30 @@ final class DReader {
             x = ((ObjDef) def).obj;
         }
         return new Value(p, x);
+    }
+
+    /**
+     * The object stream header (id → offset of the FIRST pair with that id, like the reference's linear scan), read once
+     * per stream: at most N pairs, stopping at the end of the data.
+     */
+    private Map<Long, Long> objStmIndex(PStream s, byte[] data, long n) {
+        Map<Long, Long> idx = objStmIndexes.get(s);
+        if (idx != null) return idx;
+        idx = new HashMap<>();
+        Lexer b = new Lexer(data, 0, true);
+        try {
+            for (long i = 0; i < n; i++) {
+                Object id = b.readToken();
+                Object off = b.readToken();
+                if (id == EOF || off == EOF) break;
+                long idn = id instanceof Long ? ((Long) id) & 0xffffffffL : 0;
+                idx.putIfAbsent(idn, off instanceof Long ? (Long) off : 0L);
+            }
+        } catch (PdfError e) {
+            // The reference throws only when it reaches this pair; ids after it are "not found" (→ /Extends → error).
+        }
+        objStmIndexes.put(s, idx);
+        return idx;
     }
 
     /** digitorus NewReader's %%EOF / startxref search (TS findStartXref — the single-pass equivalent). */

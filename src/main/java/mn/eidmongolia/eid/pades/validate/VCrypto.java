@@ -55,9 +55,17 @@ final class VCrypto {
         return HASH_BY_OID.get(oid);
     }
 
-    /** RSA modulus ≥ 2048 bits (SDK floor); non-RSA keys pass. */
+    static final int MAX_RSA_BITS = 8192;
+
+    /**
+     * RSA: 2048 ≤ modulus ≤ 8192 bits and public exponent ≤ 2^32 − 1 (SDK floor, plus a CPU bound on hostile keys);
+     * non-RSA keys pass.
+     */
     static boolean keyStrongEnough(PublicKey k) {
-        return !(k instanceof RSAPublicKey) || ((RSAPublicKey) k).getModulus().bitLength() >= MIN_RSA_BITS;
+        if (!(k instanceof RSAPublicKey)) return true;
+        RSAPublicKey r = (RSAPublicKey) k;
+        int bits = r.getModulus().bitLength();
+        return bits >= MIN_RSA_BITS && bits <= MAX_RSA_BITS && r.getPublicExponent().bitLength() <= 32;
     }
 
     /**
@@ -80,17 +88,11 @@ final class VCrypto {
             case ECDSA_SHA384: jca = "SHA384withECDSA"; break;
             case ECDSA_SHA512: jca = "SHA512withECDSA"; break;
             case RSA_PSS: {
-                String hash = "SHA-1";
-                int salt = 20;
-                if (p.size() > 1) {
-                    for (Asn1.Node f : Asn1.children(p.get(1))) {
-                        if (f.tag == 0xa0) {
-                            String h = HASH_BY_OID.get(Asn1.oid(Asn1.children(Asn1.children(f).get(0)).get(0)));
-                            if (h != null) hash = h;
-                        }
-                        if (f.tag == 0xa2) salt = Asn1.children(f).get(0).buf[Asn1.children(f).get(0).vs] & 0xff;
-                    }
-                }
+                // Strict (SDK rule, as Cert.strongSignatureAlgorithm): SHA-256/384/512, MGF1 with the same hash, salt = hLen,
+                // trailer 1. Anything else (absent params = SHA-1 defaults, other salts, other MGF hashes) does not verify.
+                String hash = pssHash(p.size() > 1 ? p.get(1) : null);
+                if (hash == null) return false;
+                int salt = hash.equals("SHA-256") ? 32 : hash.equals("SHA-384") ? 48 : 64;
                 if (!(key instanceof RSAPublicKey)) return false;
                 try {
                     Signature s = Signature.getInstance("RSASSA-PSS");
@@ -113,6 +115,42 @@ final class VCrypto {
         return Sig.verify(jca, key, data, sig);
     }
 
+    /** RSASSA-PSS-params → the hash name when they are exactly {hash ∈ SHA-256/384/512, MGF1(same hash), salt = hLen,
+     * trailer 1}; else null. */
+    static String pssHash(Asn1.Node params) {
+        try {
+            if (params == null || params.tag != Asn1.SEQUENCE) return null;
+            String hash = null;
+            String mgfHash = null;
+            long salt = 20;
+            long trailer = 1;
+            int last = -1;
+            for (Asn1.Node f : Asn1.children(params)) {
+                int t = f.tag;
+                if (t < 0xa0 || t > 0xa3 || t <= last) return null;
+                last = t;
+                Asn1.Node inner = Asn1.children(f).get(0);
+                if (t == 0xa0) hash = HASH_BY_OID.get(Asn1.oid(Asn1.children(inner).get(0)));
+                if (t == 0xa1) {
+                    List<Asn1.Node> m = Asn1.children(inner);
+                    if (!Asn1.oid(m.get(0)).equals("1.2.840.113549.1.1.8") || m.size() != 2) return null;
+                    mgfHash = HASH_BY_OID.get(Asn1.oid(Asn1.children(m.get(1)).get(0)));
+                }
+                if (t == 0xa2 || t == 0xa3) {
+                    if (inner.tag != Asn1.INTEGER || inner.length() > 4) return null;
+                    long v = Asn1.intValue(inner.value()).longValue();
+                    if (t == 0xa2) salt = v;
+                    else trailer = v;
+                }
+            }
+            if (hash == null || hash.equals("SHA-1") || !hash.equals(mgfHash) || trailer != 1) return null;
+            int hLen = hash.equals("SHA-256") ? 32 : hash.equals("SHA-384") ? 48 : 64;
+            return salt == hLen ? hash : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     /** TS CURVES: P-256 / P-384 / P-521 only. */
     private static boolean curveOk(Cert c) {
         try {
@@ -124,6 +162,30 @@ final class VCrypto {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    /** Longest certificate serial (RFC 5280 §4.1.2.2: ≤ 20 octets). */
+    static final int MAX_SERIAL_BITS = 159;
+
+    /**
+     * The validator's certificate entry point: {@link Cert#parse} (the SDK's single strict parser) plus the validator's
+     * bounds — serial ≤ 20 octets, and every extension the validator reads (KU, EKU, AIA, CDP, basicConstraints) must
+     * decode. Anything else → IllegalArgumentException, so a bad certificate fails only the signature that carries it.
+     */
+    static Cert cert(byte[] der) {
+        Cert c = Cert.parse(der);
+        if (c.serial.bitLength() > MAX_SERIAL_BITS) throw new IllegalArgumentException("certificate serial longer than 20 octets");
+        try {
+            c.extKeyUsage();
+            c.ocspServers();
+            c.crlDistributionPoints();
+            c.x509.getKeyUsage();
+            c.isCa();
+            c.criticalExtensionOids();
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("certificate extension does not decode", e);
+        }
+        return c;
     }
 
     /** DER of an AlgorithmIdentifier SEQUENCE { oid } (TS algNode). */

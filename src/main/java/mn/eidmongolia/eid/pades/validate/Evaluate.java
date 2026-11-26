@@ -49,6 +49,21 @@ final class Evaluate {
         }
     }
 
+    /** An online revocation check was interrupted: never swallowed as "no answer". */
+    static final class Interrupted extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        Interrupted() {
+            super("interrupted");
+        }
+    }
+
+    private static void rethrowInterrupt(Exception e) {
+        if (e instanceof java.io.InterruptedIOException || e instanceof Interrupted || Thread.currentThread().isInterrupted()) {
+            throw new Interrupted();
+        }
+    }
+
     interface StatusSource {
         CertStatus certStatus(Cert cert, Cert issuer, Instant at) throws IOException;
     }
@@ -198,8 +213,10 @@ final class Evaluate {
         final StatusSource status;
         final Instant now;
         private Instant lastRevokedAt;
+        final Memo memo;
 
-        Evaluator(List<Cert> roots, List<Cert> intermediates, List<Cert> issuers, StatusSource status, Instant now) {
+        Evaluator(List<Cert> roots, List<Cert> intermediates, List<Cert> issuers, StatusSource status, Instant now, Memo memo) {
+            this.memo = memo;
             this.roots = roots;
             this.intermediates = intermediates;
             this.issuers = issuers;
@@ -264,6 +281,7 @@ final class Evaluate {
             try {
                 st = status.certStatus(c, chain.get(1), at);
             } catch (IOException | RuntimeException e) {
+                rethrowInterrupt(e);
                 return info;
             }
             if (!st.issued) return info;
@@ -287,7 +305,7 @@ final class Evaluate {
             out.info = new PdfReport.TimestampInfo(GoFmt.formatTime(r.time), r.serial, "", false);
             Cert tsa;
             try {
-                tsa = Cert.parse(r.tsaCert == null ? new byte[0] : r.tsaCert);
+                tsa = VCrypto.cert(r.tsaCert == null ? new byte[0] : r.tsaCert);
             } catch (RuntimeException e) {
                 return out;
             }
@@ -316,7 +334,7 @@ final class Evaluate {
             if (r.malformed) return fail(s, MALFORMED);
             Cert leaf;
             try {
-                leaf = Cert.parse(r.leaf == null ? new byte[0] : r.leaf);
+                leaf = VCrypto.cert(r.leaf == null ? new byte[0] : r.leaf);
             } catch (RuntimeException e) {
                 return fail(s, MALFORMED);
             }
@@ -365,7 +383,9 @@ final class Evaluate {
             } else if (info.revocation.status.equals("unknown") && trusted) {
                 s.problems.add(REVOCATION_UNKNOWN);
             }
-            if (trusted && info.issuedByEid && info.usage.equals("document_signer") && !s.problems.contains(REVOKED)) {
+            // SDK rule (as .NET): a platform-attested name only for a document covered or extended only by signatures.
+            boolean unmodified = r.coversWhole || r.laterSignaturesOnly;
+            if (trusted && unmodified && info.issuedByEid && info.usage.equals("document_signer") && !s.problems.contains(REVOKED)) {
                 s.signerName = r.signerName;
                 s.signerNameSource = "platform_attested";
             }
@@ -375,7 +395,7 @@ final class Evaluate {
                 List<List<Cert>> chains = new ArrayList<>();
                 chains.add(chain);
                 chains.add(tsChain == null ? List.of() : tsChain);
-                s.ltv = ltvCoverage(r.dss, at, now, chains);
+                s.ltv = ltvCoverage(r.dss, at, now, chains, memo);
             }
             if (cades) {
                 s.signatureLevel = signingTime != null && s.ltv != null && s.ltv.complete ? "PAdES-BASELINE-LT"
@@ -418,7 +438,7 @@ final class Evaluate {
         List<Cert> out = new ArrayList<>();
         for (byte[] d : ders) {
             try {
-                out.add(Cert.parse(d));
+                out.add(VCrypto.cert(d));
             } catch (RuntimeException e) {
                 // skipped
             }
@@ -468,12 +488,12 @@ final class Evaluate {
     private static final String OID_OCSP_NOCHECK = "1.3.6.1.5.5.7.48.1.5";
 
     /** Go ltvCoverage. */
-    static PdfReport.LtvInfo ltvCoverage(Extract.RawDss dss, Instant at, Instant now, List<List<Cert>> chains) {
+    static PdfReport.LtvInfo ltvCoverage(Extract.RawDss dss, Instant at, Instant now, List<List<Cert>> chains, Memo memo) {
         PdfReport.LtvInfo out = new PdfReport.LtvInfo();
         List<Revocation.Crl> crls = new ArrayList<>();
         if (dss != null) {
             for (byte[] der : dss.crls) {
-                Revocation.Crl c = Revocation.parseCrl(der);
+                Revocation.Crl c = memo.crl(der);
                 if (c != null) crls.add(c);
             }
         }
@@ -486,22 +506,18 @@ final class Evaluate {
                 for (byte[] x : seen) if (Arrays.equals(x, cert.raw)) dup = true;
                 if (dup) continue;
                 seen.add(cert.raw);
-                if (!covered(cert, issuer, at, now, dss == null ? List.of() : dss.ocsps, crls)) out.missing.add(GoFmt.commonName(cert.rawSubject));
+                if (!covered(cert, issuer, at, now, dss == null ? List.of() : dss.ocsps, crls, memo)) out.missing.add(GoFmt.commonName(cert.rawSubject));
             }
         }
         out.complete = out.missing.isEmpty() && !seen.isEmpty();
         return out;
     }
 
-    private static boolean covered(Cert cert, Cert issuer, Instant at, Instant now, List<byte[]> ocsps, List<Revocation.Crl> crls) {
+    private static boolean covered(Cert cert, Cert issuer, Instant at, Instant now, List<byte[]> ocsps, List<Revocation.Crl> crls, Memo memo) {
         for (byte[] der : ocsps) {
-            Revocation.OcspResp resp;
-            try {
-                resp = Revocation.parseOcsp(der, cert.serial, issuer);
-            } catch (RuntimeException e) {
-                continue;
-            }
-            if (!resp.status.equals("good") || !Revocation.ocspCertIdMatches(der, cert, issuer)) continue;
+            Revocation.OcspResp resp = memo.parseOcsp(der, cert, issuer);
+            if (resp == null) continue;
+            if (!resp.status.equals("good") || !memo.certIdMatches(der, cert, issuer)) continue;
             if (resp.certificate != null && !Arrays.equals(resp.certificate.raw, issuer.raw)
                 && resp.certificate.extensionValue(OID_OCSP_NOCHECK) == null) {
                 continue;
@@ -509,7 +525,7 @@ final class Evaluate {
             if (Revocation.ocspFreshAt(resp, at, now)) return true;
         }
         for (Revocation.Crl crl : crls) {
-            if (!Revocation.crlFor(crl, cert, issuer) || !Revocation.freshAt(crl.thisUpdate, crl.nextUpdate, at, now)) continue;
+            if (!memo.crlFor(crl, cert, issuer) || !Revocation.freshAt(crl.thisUpdate, crl.nextUpdate, at, now)) continue;
             if (Revocation.crlListed(crl, cert) != null) continue;
             return true;
         }
@@ -540,7 +556,10 @@ final class Evaluate {
         private final Extract.RawDss dss;
         private final Instant now;
 
-        DssStatus(Extract.RawDss dss, Instant now) {
+        private final Memo memo;
+
+        DssStatus(Extract.RawDss dss, Instant now, Memo memo) {
+            this.memo = memo;
             this.dss = dss;
             this.now = now;
         }
@@ -551,7 +570,7 @@ final class Evaluate {
             boolean good = false;
             if (dss != null) {
                 for (byte[] der : dss.ocsps) {
-                    Revocation.OcspResp resp = ocspFor(der, cert, issuer);
+                    Revocation.OcspResp resp = memo.ocspFor(der, cert, issuer);
                     if (resp == null) continue;
                     if (resp.status.equals("revoked")) {
                         if (revoked == null || Revocation.before(resp.revokedAt, revoked)) revoked = resp.revokedAt;
@@ -560,8 +579,8 @@ final class Evaluate {
                     }
                 }
                 for (byte[] der : dss.crls) {
-                    Revocation.Crl crl = Revocation.parseCrl(der);
-                    if (crl == null || !Revocation.crlFor(crl, cert, issuer)) continue;
+                    Revocation.Crl crl = memo.crl(der);
+                    if (crl == null || !memo.crlFor(crl, cert, issuer)) continue;
                     Instant t = Revocation.crlListed(crl, cert);
                     if (t != null) {
                         if (revoked == null || Revocation.before(t, revoked)) revoked = t;
@@ -619,6 +638,7 @@ final class Evaluate {
                 try {
                     der = f.send("POST", u, "application/ocsp-request", req);
                 } catch (IOException | RuntimeException e) {
+                    rethrowInterrupt(e);
                     continue;
                 }
                 if (der.length > ONLINE_OCSP_MAX) continue;
@@ -640,6 +660,7 @@ final class Evaluate {
                 try {
                     crl = Revocation.parseCrl(f.send("GET", u, null, null));
                 } catch (IOException | RuntimeException e) {
+                    rethrowInterrupt(e);
                     continue;
                 }
                 if (crl == null || !Revocation.crlFor(crl, cert, issuer)) continue;
@@ -648,6 +669,81 @@ final class Evaluate {
                 if (Revocation.freshAt(crl.thisUpdate, crl.nextUpdate, now, now)) return new CertStatus(true, false, null);
             }
             return null;
+        }
+    }
+
+    /**
+     * Per-validation cache of DSS evidence work: each OCSP / CRL item is parsed and its signature verified once per
+     * (item, certificate, issuer), however many signatures and chain positions ask (bounded CPU on hostile documents).
+     */
+    static final class Memo {
+        private static final class Key {
+            final Object item;
+            final Object crl;
+            final Cert cert;
+            final Cert issuer;
+
+            Key(Object item, Object crl, Cert cert, Cert issuer) {
+                this.item = item;
+                this.crl = crl;
+                this.cert = cert;
+                this.issuer = issuer;
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (!(o instanceof Key)) return false;
+                Key k = (Key) o;
+                return item == k.item && crl == k.crl && java.util.Objects.equals(cert, k.cert) && java.util.Objects.equals(issuer, k.issuer);
+            }
+
+            @Override
+            public int hashCode() {
+                return java.util.Objects.hash(System.identityHashCode(item), System.identityHashCode(crl), cert, issuer);
+            }
+        }
+
+        private static final Object NONE = new Object();
+        private final Map<byte[], Object> crls = new java.util.IdentityHashMap<>();
+        private final Map<Key, Object> parsed = new HashMap<>();
+        private final Map<Key, Object> fors = new HashMap<>();
+        private final Map<Key, Boolean> ids = new HashMap<>();
+        private final Map<Key, Boolean> crlFors = new HashMap<>();
+
+        Revocation.Crl crl(byte[] der) {
+            Object v = crls.computeIfAbsent(der, d -> {
+                Revocation.Crl c = Revocation.parseCrl(d);
+                return c == null ? NONE : c;
+            });
+            return v == NONE ? null : (Revocation.Crl) v;
+        }
+
+        boolean crlFor(Revocation.Crl crl, Cert cert, Cert issuer) {
+            return crlFors.computeIfAbsent(new Key(null, crl, cert, issuer), k -> Revocation.crlFor(crl, cert, issuer));
+        }
+
+        /** parseOcsp(der, cert.serial, issuer), or null on any failure. */
+        Revocation.OcspResp parseOcsp(byte[] der, Cert cert, Cert issuer) {
+            Object v = parsed.computeIfAbsent(new Key(der, null, cert, issuer), k -> {
+                try {
+                    return Revocation.parseOcsp(der, cert.serial, issuer);
+                } catch (RuntimeException e) {
+                    return NONE;
+                }
+            });
+            return v == NONE ? null : (Revocation.OcspResp) v;
+        }
+
+        boolean certIdMatches(byte[] der, Cert cert, Cert issuer) {
+            return ids.computeIfAbsent(new Key(der, null, cert, issuer), k -> Revocation.ocspCertIdMatches(der, cert, issuer));
+        }
+
+        Revocation.OcspResp ocspFor(byte[] der, Cert cert, Cert issuer) {
+            Object v = fors.computeIfAbsent(new Key(der, null, cert, issuer), k -> {
+                Revocation.OcspResp r = Evaluate.ocspFor(der, cert, issuer);
+                return r == null ? NONE : r;
+            });
+            return v == NONE ? null : (Revocation.OcspResp) v;
         }
     }
 

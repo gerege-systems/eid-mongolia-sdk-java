@@ -28,6 +28,8 @@ final class Extract {
     static final int MAX_SIGNATURES = 16;
     private static final int MAX_DSS_ITEMS = 64;
     private static final int MAX_DSS_STREAM = 1 << 20;
+    private static final long MAX_DSS_TOTAL = 8L << 20;
+    static final int MAX_CMS_CERTS = 32;
     private static final int MAX_CLAIMED_ROLES = 4;
     private static final int MAX_CLAIMED_ROLE_RUNES = 900;
 
@@ -210,7 +212,7 @@ final class Extract {
     static boolean sealCertificateDer(byte[] der) {
         if (der == null) return false;
         try {
-            Cert c = Cert.parse(der);
+            Cert c = VCrypto.cert(der);
             int ku = keyUsage(c);
             return !c.isCa() && (ku & 2) != 0 && (ku & 1) == 0 && c.extKeyUsage().isEmpty();
         } catch (RuntimeException e) {
@@ -281,7 +283,7 @@ final class Extract {
             }
         }
         for (Cert c : p7.certs) if (!Arrays.equals(c.raw, leaf.raw)) s.certs.add(c.raw);
-        s.weakDigest = !STRONG.contains(si.digestAlg);
+        s.weakDigest = !STRONG.contains(si.digestAlg) || SHA1_SIG_ALGS.contains(si.encAlg);
         s.integrity = verifyPkcs7(p7, sb.signed);
         s.timestamp = extractTimestamp(si);
         return s;
@@ -297,6 +299,8 @@ final class Extract {
     static final String O_SIGNER_ATTR_V2 = "0.4.0.19122.1.1";
     static final String O_ROLE = "2.5.4.72";
     private static final Set<String> STRONG = Set.of(VCrypto.SHA256, VCrypto.SHA384, VCrypto.SHA512);
+    /** SHA-1 signature algorithms named on a SignerInfo (sha1WithRSA, ecdsa-with-SHA1, dsa-with-SHA1): weak, whatever the digest. */
+    private static final Set<String> SHA1_SIG_ALGS = Set.of("1.2.840.113549.1.1.5", "1.2.840.10045.4.1", "1.2.840.10040.4.3");
 
     static final class Attr {
         final String type;
@@ -349,7 +353,9 @@ final class Extract {
                 }
             }
             if (Asn1.at(sd, i) != null && sd.get(i).tag == 0xa0) {
-                for (Asn1.Node c : Asn1.children(sd.get(i))) p.certs.add(Cert.parse(c.raw()));
+                List<Asn1.Node> cs = Asn1.children(sd.get(i));
+                if (cs.size() > MAX_CMS_CERTS) return null; // bounded chain-building work per signature
+                for (Asn1.Node c : cs) p.certs.add(VCrypto.cert(c.raw()));
                 i++;
             }
             if (Asn1.at(sd, i) != null && sd.get(i).tag == 0xa1) i++;
@@ -664,7 +670,9 @@ final class Extract {
                 hashAlg = Asn1.oid(Asn1.expect(Asn1.at(Asn1.children(Asn1.expect(Asn1.at(mi, 0), Asn1.SEQUENCE, "alg")), 0), Asn1.OID, "alg"));
                 hashed = Asn1.expect(Asn1.at(mi, 1), Asn1.OCTET_STRING, "hashedMessage").value();
                 if (hashed.length == 0) return out;
-                serial = GoFmt.hexSerial(Asn1.expect(Asn1.at(info, 3), Asn1.INTEGER, "serial").value());
+                Asn1.Node sn = Asn1.expect(Asn1.at(info, 3), Asn1.INTEGER, "serial");
+                if (sn.length() > 20) return out; // RFC 3161 serials are small; a huge one makes the token malformed
+                serial = GoFmt.hexSerial(sn.value());
                 time = Asn1.preciseTime(Asn1.expect(Asn1.at(info, 4), Asn1.GENERALIZED_TIME, "genTime"));
             } catch (RuntimeException e) {
                 return out;
@@ -677,7 +685,7 @@ final class Extract {
             out.tsaCert = tsa.raw;
             for (Cert c : tok.certs) if (!Arrays.equals(c.raw, tsa.raw)) out.certs.add(c.raw);
             String h = VCrypto.hashName(hashAlg);
-            out.weakDigest = !STRONG.contains(tok.signers.get(0).digestAlg) || !(h != null && !h.equals("SHA-1"));
+            out.weakDigest = !STRONG.contains(tok.signers.get(0).digestAlg) || SHA1_SIG_ALGS.contains(tok.signers.get(0).encAlg) || !(h != null && !h.equals("SHA-1"));
             if (h == null) return out;
             out.matches = Arrays.equals(VCrypto.digest(h, si.sig), hashed);
             return out;
@@ -766,22 +774,32 @@ final class Extract {
     /** /DSS /Certs /OCSPs /CRLs streams, decoded; unparsable / over-limit entries skipped. */
     private static RawDss extractDss(DReader.Value dss) {
         if (!dss.kind().equals("dict")) return null;
-        return new RawDss(readDss(dss, "Certs"), readDss(dss, "OCSPs"), readDss(dss, "CRLs"));
+        long[] total = {0};
+        java.util.Set<Object> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        return new RawDss(readDss(dss, "Certs", total, seen), readDss(dss, "OCSPs", total, seen), readDss(dss, "CRLs", total, seen));
     }
 
-    private static List<byte[]> readDss(DReader.Value dss, String key) {
+    /**
+     * One DSS array. Items over 1 MiB are skipped (the raw /Length and the decoded size are checked before anything is
+     * kept); the same stream object is read once; all DSS items together are capped at {@link #MAX_DSS_TOTAL} bytes.
+     */
+    private static List<byte[]> readDss(DReader.Value dss, String key, long[] total, java.util.Set<Object> seen) {
         DReader.Value arr = dss.key(key);
         List<byte[]> out = new ArrayList<>();
         for (int i = 0; i < arr.len() && i < MAX_DSS_ITEMS; i++) {
             DReader.Value e = arr.index(i);
             if (!e.kind().equals("stream")) continue;
+            if (!seen.add(e.data)) continue;
             byte[] b;
             try {
-                b = e.streamData();
+                long n = e.streamLength();
+                if (n < 0 || n > MAX_DSS_STREAM) continue;
+                b = e.streamData(MAX_DSS_STREAM);
             } catch (RuntimeException x) {
                 continue;
             }
-            if (b.length > MAX_DSS_STREAM) continue;
+            if (b.length > MAX_DSS_STREAM || total[0] + b.length > MAX_DSS_TOTAL) continue;
+            total[0] += b.length;
             out.add(b);
         }
         return out;

@@ -352,7 +352,14 @@ final class Classifier {
                 changed.add(num);
                 continue;
             }
-            if (entEq(be, fe) && (be.kind == ENT_USE || entEq(ent(base.xref, be.off), ent(fin.xref, fe.off)))) continue;
+            if (entEq(be, fe) && (be.kind == ENT_USE || entEq(ent(base.xref, be.off), ent(fin.xref, fe.off)))) {
+                // SDK rule, stricter than TS revisions.ts / Go revisions.go: an object the xref still points at unchanged must
+                // also END inside the signed revision. A stream whose /Length runs past it would otherwise be completed by
+                // bytes appended later (shadow attack) while its entry looks untouched. Object streams are in-use objects
+                // themselves, so a compressed member is covered by its container's own check.
+                if (fe.kind == ENT_USE && fin.extentEnd(num) > end) throw fail();
+                continue;
+            }
             Object bo = base.get(num);
             Object fo = fin.get(num);
             boolean unpack = be.kind == ENT_COMP && fe.kind == ENT_USE && fe.gen == 0

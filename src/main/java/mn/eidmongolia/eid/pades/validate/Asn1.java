@@ -127,26 +127,32 @@ final class Asn1 {
         return n;
     }
 
+    /** Longest OID accepted (bytes); larger ones are rejected (bounded work on hostile input). */
+    static final int MAX_OID_BYTES = 128;
+
+    /** OID contents → "1.2.3". At most {@link #MAX_OID_BYTES} bytes and 63-bit arcs, else {@link Error}. */
     static String oidString(byte[] v) {
-        List<BigInteger> out = new ArrayList<>();
-        BigInteger cur = BigInteger.ZERO;
+        if (v.length > MAX_OID_BYTES) throw new Error("asn1: OID too long");
+        List<Long> out = new ArrayList<>();
+        long cur = 0;
         for (byte x : v) {
-            cur = cur.shiftLeft(7).or(BigInteger.valueOf(x & 0x7f));
+            if ((cur >>> 56) != 0) throw new Error("asn1: OID arc too large");
+            cur = (cur << 7) | (x & 0x7f);
             if ((x & 0x80) == 0) {
                 out.add(cur);
-                cur = BigInteger.ZERO;
+                cur = 0;
             }
         }
         if (out.isEmpty()) return "";
-        BigInteger first = out.get(0);
-        BigInteger a = first.compareTo(BigInteger.valueOf(40)) < 0 ? BigInteger.ZERO
-            : first.compareTo(BigInteger.valueOf(80)) < 0 ? BigInteger.ONE : BigInteger.TWO;
-        StringBuilder s = new StringBuilder().append(a).append('.').append(first.subtract(a.multiply(BigInteger.valueOf(40))));
+        long first = out.get(0);
+        long a = first < 40 ? 0 : first < 80 ? 1 : 2;
+        StringBuilder s = new StringBuilder().append(a).append('.').append(first - a * 40);
         for (int i = 1; i < out.size(); i++) s.append('.').append(out.get(i));
         return s.toString();
     }
 
     static String oid(Node n) {
+        if (n.length() > MAX_OID_BYTES) throw new Error("asn1: OID too long");
         return oidString(n.value());
     }
 

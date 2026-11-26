@@ -319,6 +319,7 @@ final class PdfParser {
             } else throw PdfObjError.syntax();
             if (size < 0 || size > len - pos) throw PdfObjError.syntax();
             int sz = (int) size;
+            budget.copy(sz);
             o.val = new PStream(d, Arrays.copyOfRange(b, pos, pos + sz));
             pos += sz;
             skipSpace();

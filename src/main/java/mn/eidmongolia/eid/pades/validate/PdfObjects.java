@@ -26,6 +26,7 @@ final class PdfObjects {
     static final int MAX_PDF_DEPTH = 64;
     static final int MAX_PDF_NODES = 1_000_000;
     static final int MAX_PDF_INFLATE = 64 << 20;
+    static final long MAX_PDF_COPY = 256L << 20;
     static final int MAX_XREF_SECTIONS = 128;
     static final int MAX_OBJECT_NUMBER = 1 << 23;
 
@@ -289,11 +290,18 @@ final class PdfObjects {
     static final class PdfBudget {
         int nodes = MAX_PDF_NODES;
         long inflate = MAX_PDF_INFLATE;
+        /** Bytes the parser may copy out of the document for streams (each cached object is copied once). */
+        long copy = MAX_PDF_COPY;
         final Map<String, CachedObj> objs = new HashMap<>();
         final Map<Long, ObjStm> stms = new HashMap<>();
 
         void node() {
             if (--nodes < 0) throw PdfObjError.limit();
+        }
+
+        void copy(long n) {
+            copy -= n;
+            if (copy < 0) throw PdfObjError.limit();
         }
 
         private static Object single(Object v) {

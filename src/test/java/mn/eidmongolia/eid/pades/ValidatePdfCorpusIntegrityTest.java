@@ -22,6 +22,7 @@ public class ValidatePdfCorpusIntegrityTest {
             n++;
         }
         assertTrue(n > 0);
+        assertEquals("pades-validate/1 case count", 67, ((List<?>) ValidatePdfGoldenTest.manifest().get("cases")).size());
         for (Object c : (List<?>) ValidatePdfGoldenTest.manifest().get("cases")) {
             String in = ((Json.Obj) c).getString("input");
             assertTrue(in, sums.contains("  " + in + "\n"));

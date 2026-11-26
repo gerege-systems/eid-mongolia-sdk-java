@@ -150,6 +150,53 @@ public class ValidatePdfNegativeTest {
         }
     }
 
+    @Test
+    public void hugeDigitTokenEndToEndIsBounded() {
+        String digits = "7".repeat(9_000_000);
+        byte[] d = ("%PDF-1.7\nxref\n" + digits + " 1\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n").getBytes(StandardCharsets.US_ASCII);
+        long t0 = System.nanoTime();
+        assertEquals("PDF_INVALID", code(d));
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 10_000);
+    }
+
+    /** 15 copies of the signature dictionary appended as a later revision: evaluated once, bounded, same verdict each. */
+    @Test
+    public void signatureDictionaryCopiesAreEvaluatedOnce() {
+        byte[] d = valid();
+        String tail = new String(d, lastIndexOf(d, "trailer"), d.length - lastIndexOf(d, "trailer"), StandardCharsets.ISO_8859_1);
+        int startxref = Integer.parseInt(tail.replaceAll("(?s).*startxref\\s+(\\d+).*", "$1"));
+        int size = Integer.parseInt(tail.replaceAll("(?s).*/Size (\\d+).*", "$1"));
+        String root = tail.replaceAll("(?s).*/Root (\\d+) 0 R.*", "$1");
+        int br = indexOf(d, "/ByteRange", 0);
+        int o = lastIndexOf(java.util.Arrays.copyOf(d, br), " 0 obj");
+        while (o > 0 && d[o - 1] != '\n') o--;
+        int bodyStart = indexOf(d, "obj", o) + 3;
+        int e = indexOf(d, "endobj", br);
+        String body = new String(d, bodyStart, e - bodyStart, StandardCharsets.ISO_8859_1);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.writeBytes(d);
+        StringBuilder x = new StringBuilder("xref\n" + size + " 15\n");
+        StringBuilder objs = new StringBuilder();
+        for (int i = 0; i < 15; i++) {
+            x.append(String.format("%010d 00000 n \n", d.length + objs.length()));
+            objs.append(size + i).append(" 0 obj").append(body).append("endobj\n");
+        }
+        out.writeBytes(objs.toString().getBytes(StandardCharsets.ISO_8859_1));
+        int xrefAt = out.size();
+        out.writeBytes((x + "trailer\n<< /Size " + (size + 15) + " /Root " + root + " 0 R /Prev " + startxref + " >>\nstartxref\n" + xrefAt
+            + "\n%%EOF\n").getBytes(StandardCharsets.ISO_8859_1));
+        long t0 = System.nanoTime();
+        PdfReport r = EidPades.validatePdf(out.toByteArray(), golden());
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 10_000);
+        assertEquals(16, r.signatures().size());
+        String first = null;
+        for (int i = 1; i < 16; i++) {
+            String j = r.signatures().get(i).problems().toString();
+            if (first == null) first = j;
+            assertEquals(first, j);
+        }
+    }
+
     /** Every truncation point (step) and deterministic mutations: a report or a typed error, each within a time bound. */
     @Test
     public void truncationAndMutationSweep() {

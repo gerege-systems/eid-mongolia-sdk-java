@@ -258,7 +258,7 @@ final class Revocation {
         Asn1.Node b3 = Asn1.at(basic, 3);
         if (b3 != null && b3.tag == 0xa0) {
             List<Asn1.Node> certs = Asn1.children(Asn1.expect(Asn1.children(b3).get(0), Asn1.SEQUENCE, "certs"));
-            if (!certs.isEmpty()) certificate = Cert.parse(certs.get(0).raw());
+            if (!certs.isEmpty()) certificate = VCrypto.cert(certs.get(0).raw());
         }
         if (certificate != null) {
             if (!VCrypto.verify(certificate, sigAlg, tbs.raw(), sigBits)) throw new OcspError("bad signature on embedded certificate");
