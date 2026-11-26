@@ -40,7 +40,8 @@ tasks.test {
     testLogging {
         events("failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
-        showStandardStreams = false
+        // The live contract test (contract.yml) prints its WARN lines and ::warning annotations.
+        showStandardStreams = System.getenv("EID_CONTRACT") == "1"
     }
 }
 

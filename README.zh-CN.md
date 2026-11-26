@@ -14,7 +14,7 @@
 
 - Java 17+，**无运行时依赖**——`java.security` + 一个小型 DER writer（不使用 BouncyCastle、Jackson、Kotlin）。
 - 线程安全，无全局状态。仅在 `complete`（TSA、OCSP/CRL）以及 `EidQr.verify` 的默认 OCSP 中使用网络。
-- **这里没有 RP-API 客户端。** 发起公民 session、获取 `RAW_DIGEST_SIGNATURE` 签名、`POST /pdf/signatures`、
+- **RP-API 客户端尚未完成**（`mn.eidmongolia.eid`——开发中，见下文）。发起公民 session、获取 `RAW_DIGEST_SIGNATURE` 签名、`POST /pdf/signatures`、
   `POST /authentication/qr` 等，都需直接通过 HTTPS/JSON 调用 RP-API——
   [RP-API 文档](https://developer.eidmongolia.mn/#overview)。本库只负责准备/嵌入 PDF、组装登记请求体，
   以及解析/验证“我的 QR”。
@@ -167,6 +167,33 @@ revocationSoftFail)`——为 null 时使用内置的国家 root + 02–05、颁
 `QR_CERT_REVOKED`、`QR_REVOCATION_UNKNOWN`、`QR_SIGNATURE_INVALID`、`QR_CLAIMS_INVALID`、`QR_AUDIENCE_MISMATCH`、
 `QR_SESSION_MISMATCH`、`QR_NONCE_MISMATCH`、`QR_NOT_YET_VALID`、`QR_EXPIRED`、`QR_DATA_INVALID`。RP-API 的 HTTP 错误
 （`QR_TOKEN_INVALID`、`QR_PRESENTATION_GONE` ……）会出现在您的 HTTP 客户端中。
+
+## RP-API 客户端（`mn.eidmongolia.eid`）——开发中
+
+> **开发中（in progress）。** 与 Go / TS SDK 范围相同的 RP-API 客户端正在分阶段加入本 artifact（坐标不变）。目前已有：
+> 配置、transport、错误、路由表、wire 类型、discovery `sessionTtl`、加密辅助函数。Auth / Sign / Session / Validator
+> 将在后续版本中提供——在此之前请直接通过 HTTPS/JSON 调用 RP-API。
+
+```java
+EidClient eid = EidClient.builder(new Credentials(rpUuid, "Internet bank", apiSecret))
+    .transport(JdkHttpTransport.create(sslContext))   // mTLS 时；默认 JdkHttpTransport.create()
+    .language("en")                                   // Accept-Language
+    .build();                                         // baseUrl 默认 https://rp.eidmongolia.mn
+SessionTtl ttl = eid.auth().sessionTtl();             // discovery：auth / sign session 有效期
+
+String link = DeviceLink.build(session.linkInput(DeviceLinkType.QR, "eng").build());  // authCode = HMAC-SHA256
+String interactions = EidCrypto.interactionsToBase64(List.of(Interaction.displayTextAndPin("Log in")));
+byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                          // ACSP_V2
+```
+
+- `baseUrl`：仅 https（http 仅限 localhost / loopback），旧的 `ca.eidmongolia.mn` 主机会给出明确错误；Bearer API secret；
+  每次调用有总截止时间（默认 15 秒，PDF 80 秒）；JSON 响应 ≤ 4 MiB；不跟随重定向。
+- 阻塞调用（适合虚拟线程）；`Thread.interrupt()` 取消调用（`EidException.Network#cancelled`）。
+- 错误：`EidException`（unchecked）——`Authentication`（401）、`Forbidden`（403）、`Api` 及按代码划分的子类
+  （`NoSigningCertificate`、`SealServiceDisabled` …）、`Network`、`ResponseTooLarge`、`SessionFailed`、`Validation`、
+  `DeviceLink`；均有 `code()`、`status()`、`retryAfter()`、`retryable()`。消息 / `op` 中不含公民身份号。
+- 验证：CA 的 `devicelink_golden.json`（未修改副本，固定 SHA-256）、Smart-ID ACSP_V2 向量、与 `JSON.stringify`
+  字节一致的 interactions 用例；`contract.yml` 每天将路由表与线上 `/.well-known/eid` 对照。
 
 ## 开发
 

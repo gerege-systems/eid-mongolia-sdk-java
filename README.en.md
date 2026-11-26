@@ -14,7 +14,7 @@ Full documentation: <https://developer.eidmongolia.mn/#overview>.
 
 - Java 17+, **no runtime dependencies** — `java.security` + a small DER writer (no BouncyCastle, Jackson or Kotlin).
 - Thread-safe, no global state. The network is used only in `complete` (TSA, OCSP/CRL) and in `EidQr.verify`'s default OCSP.
-- **There is no RP-API client here.** Starting a citizen session, obtaining a `RAW_DIGEST_SIGNATURE` signature, `POST /pdf/signatures`,
+- **The RP-API client is not complete yet** (`mn.eidmongolia.eid` — in progress, see below). Starting a citizen session, obtaining a `RAW_DIGEST_SIGNATURE` signature, `POST /pdf/signatures`,
   `POST /authentication/qr` and so on are done by calling the RP-API directly over HTTPS/JSON —
   [RP-API documentation](https://developer.eidmongolia.mn/#overview). This library only prepares/embeds the PDF, assembles the registration body,
   and parses/verifies "My QR".
@@ -167,6 +167,35 @@ Codes (`EidQrException.code()`): `QR_FORMAT_INVALID`, `QR_JWS_MALFORMED`, `QR_HE
 `QR_CERT_REVOKED`, `QR_REVOCATION_UNKNOWN`, `QR_SIGNATURE_INVALID`, `QR_CLAIMS_INVALID`, `QR_AUDIENCE_MISMATCH`,
 `QR_SESSION_MISMATCH`, `QR_NONCE_MISMATCH`, `QR_NOT_YET_VALID`, `QR_EXPIRED`, `QR_DATA_INVALID`. The RP-API's HTTP errors
 (`QR_TOKEN_INVALID`, `QR_PRESENTATION_GONE` …) arrive in your HTTP client.
+
+## RP-API client (`mn.eidmongolia.eid`) — in progress
+
+> **In progress.** An RP-API client with the same scope as the Go / TS SDKs is being added to this artifact in stages
+> (coordinates unchanged). Available now: configuration, transport, errors, route table, wire types, discovery
+> `sessionTtl`, crypto helpers. Auth / Sign / Session / Validator come in the next releases — until then call the RP-API
+> directly over HTTPS/JSON.
+
+```java
+EidClient eid = EidClient.builder(new Credentials(rpUuid, "Internet bank", apiSecret))
+    .transport(JdkHttpTransport.create(sslContext))   // for mTLS; default JdkHttpTransport.create()
+    .language("en")                                   // Accept-Language
+    .build();                                         // baseUrl defaults to https://rp.eidmongolia.mn
+SessionTtl ttl = eid.auth().sessionTtl();             // discovery: auth / sign session lifetimes
+
+String link = DeviceLink.build(session.linkInput(DeviceLinkType.QR, "eng").build());  // authCode = HMAC-SHA256
+String interactions = EidCrypto.interactionsToBase64(List.of(Interaction.displayTextAndPin("Log in")));
+byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                          // ACSP_V2
+```
+
+- `baseUrl`: https only (http only for localhost / loopback), the legacy `ca.eidmongolia.mn` host is a clear error;
+  Bearer API secret; a total deadline per call (default 15 s, PDF 80 s); JSON responses ≤ 4 MiB; no redirects.
+- Blocking calls (fine on virtual threads); `Thread.interrupt()` cancels a call (`EidException.Network#cancelled`).
+- Errors: `EidException` (unchecked) — `Authentication` (401), `Forbidden` (403), `Api` with a subclass per code
+  (`NoSigningCertificate`, `SealServiceDisabled` …), `Network`, `ResponseTooLarge`, `SessionFailed`, `Validation`,
+  `DeviceLink`; all have `code()`, `status()`, `retryAfter()`, `retryable()`. Messages / `op` never contain citizen IDs.
+- Verified by: the CA's `devicelink_golden.json` (unedited copy, SHA-256 pinned), the Smart-ID ACSP_V2 vector,
+  `JSON.stringify`-byte-identical interactions cases; `contract.yml` checks the route table against the live
+  `/.well-known/eid` daily.
 
 ## Development
 
