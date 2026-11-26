@@ -9,6 +9,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 
 /** Embedded eID chain (same PEMs as Go `pades/internal/eidcrypto/chain`). Immutable, loaded once. */
 final class EidChain {

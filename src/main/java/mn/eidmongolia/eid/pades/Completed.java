@@ -2,6 +2,8 @@ package mn.eidmongolia.eid.pades;
 
 import java.util.ArrayList;
 import java.util.List;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * {@link EidPades#complete} output. {@link #registration} builds the CA {@code POST /pdf/signatures} body the RP backend

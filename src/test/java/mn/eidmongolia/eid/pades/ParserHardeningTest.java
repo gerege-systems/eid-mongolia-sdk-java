@@ -11,6 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 import org.junit.Test;
 
 /** Hostile-PDF parser behaviour found in the 0.1.0 re-review (no golden vector covers these). */

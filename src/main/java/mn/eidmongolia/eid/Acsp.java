@@ -46,7 +46,7 @@ public final class Acsp {
      */
     public static byte[] v2Digest(AcspV2Params p, String hashAlgorithm) {
         HashAlgorithm h = HashAlgorithm.fromWire(hashAlgorithm);
-        if (h == null) throw new EidException.Validation("дэмжигдээгүй hashAlgorithm: " + hashAlgorithm);
+        if (h == null) throw new EidException.Validation(ValidationReasons.ALG_UNSUPPORTED, "дэмжигдээгүй hashAlgorithm: " + hashAlgorithm);
         return v2Digest(p, h);
     }
 

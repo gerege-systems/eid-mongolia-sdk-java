@@ -14,13 +14,18 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import mn.eidmongolia.eid.EidException;
+import mn.eidmongolia.eid.OcspRevocationChecker;
+import mn.eidmongolia.eid.RevocationStatus;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * «Миний QR» (contract {@code myqr-2026-10-26}): the citizen shows {@code EIDMN-QR1:<token>} in the eID app → the RP
@@ -29,7 +34,8 @@ import java.util.regex.Pattern;
  * returns «Миний мэдээлэл» (the app's dict as is, payload order). Same rules as the Go / TS / .NET SDKs
  * ({@code myqr_vectors.json}). No RP-API client here — only parsing and verification.
  *
- * <p>Thread-safe, no global mutable state. Network only for the default revocation check (the leaf's AIA OCSP).
+ * <p>Thread-safe. The only shared state is the default revocation check's process-wide OCSP cache (GOOD answers,
+ * at most 5 min / the response's nextUpdate). Network only for that default check (the leaf's AIA OCSP).
  */
 public final class EidQr {
     /** Prefix of the citizen app's QR: {@code EIDMN-QR1:<token>}. */
@@ -92,7 +98,8 @@ public final class EidQr {
      * @param anchors            trusted roots (null/empty = the embedded Mongolian National Root CA)
      * @param intermediates      intermediate CAs (null = the embedded 02–05); x5c[1] is always only an intermediate candidate
      * @param allowedIssuerSkis  SKI (hex, ":" allowed) of the CA that issued the leaf (null/empty = {@link #CITIZEN_ISSUING_CA_SKI})
-     * @param revocation         null = the leaf's AIA OCSP (hard-fail)
+     * @param revocation         null = the leaf's AIA OCSP via {@link mn.eidmongolia.eid.OcspRevocationChecker} (hard-fail;
+     *                           OCSP «unknown» = revoked, thisUpdate within 48 h — the Go / TS rule)
      * @param revocationSoftFail true accepts "unknown"
      */
     public record Trust(List<X509Certificate> anchors, List<X509Certificate> intermediates, List<String> allowedIssuerSkis,
@@ -299,6 +306,19 @@ public final class EidQr {
             if (anchors.contains(cur)) anchored = true;
         }
         if (!anchored || path.size() < 2) throw err(EidQrException.CHAIN_INVALID, "the chain does not reach a trusted root");
+        // Fail-closed like the RP validator (TS verifyChain): no unknown critical extension anywhere, no CA with name
+        // constraints, pathLenConstraint (CAs below it, the leaf not counted), CA RSA keys ≥ 2048.
+        for (int i = 0; i < path.size(); i++) {
+            Cert c = path.get(i);
+            if (c.hasUnhandledCritical()) throw err(EidQrException.CHAIN_INVALID, "unknown critical extension (" + c.serialRef() + ")");
+            if (i == 0) continue;
+            if (c.extensionValue(Cert.OID_NAME_CONSTRAINTS) != null) {
+                throw err(EidQrException.CHAIN_INVALID, "CA with name constraints (" + c.serialRef() + ")");
+            }
+            Integer pathLen = c.maxPathLen();
+            if (pathLen != null && i - 1 > pathLen) throw err(EidQrException.CHAIN_INVALID, "pathLenConstraint exceeded (" + c.serialRef() + ")");
+            if (c.isRsa() && c.rsaBits() < MIN_RSA_BITS) throw err(EidQrException.CHAIN_INVALID, "CA RSA key < 2048 (" + c.serialRef() + ")");
+        }
         for (Cert c : path) {
             if (!validWithSkew(c, now)) throw err(EidQrException.CHAIN_INVALID, "certificate not valid now (" + c.serialRef() + ")");
         }
@@ -340,22 +360,30 @@ public final class EidQr {
         }
     }
 
-    /** Default revocation: the leaf's AIA OCSP (CertID, signature, responder, freshness). No answer → "unknown". */
+    /** The shared default checker (its cache spans calls), created on first use. */
+    private static final class DefaultOcsp {
+        static final OcspRevocationChecker CHECKER = OcspRevocationChecker.builder().bindCertId(true).build();
+    }
+
+    /**
+     * Default revocation: the leaf's AIA OCSP by the RP SDK's {@link OcspRevocationChecker} — the Go {@code qrRevocation}
+     * + {@code NewOCSPChecker} rule: OCSP «unknown» (the issuer never issued that serial) counts as revoked, thisUpdate
+     * must be within 48 h (+5 min skew), 2 s / 3 s timeouts; plus the CertID issuer-hash binding the old check had
+     * ({@link OcspRevocationChecker.Builder#bindCertId}). No acceptable answer → "unknown". (Before 0.2.0 this used the
+     * PAdES LTV rule: «unknown» → QR_REVOCATION_UNKNOWN and a 24 h window; the LTV rule itself is unchanged.)
+     */
     static String defaultRevocation(Cert leaf, Cert issuer) {
-        Fetcher f = new Fetcher(DefaultHttp.INSTANCE);
-        for (String url : leaf.ocspServers()) {
-            try {
-                byte[] der = f.post(url, "application/ocsp-request", Ocsp.request(leaf, issuer));
-                Ocsp.Response resp = Ocsp.parseForCert(der, leaf, issuer);
-                if (!Ocsp.responderOk(resp, issuer) || !Ocsp.certIdMatches(der, leaf, issuer)) continue;
-                if (resp.status == Ocsp.REVOKED) return "revoked";
-                Date n = new Date();
-                if (resp.status == Ocsp.GOOD && Revocation.freshAt(resp.thisUpdate, resp.nextUpdate, n, n)) return "good";
-            } catch (Exception e) {
-                // next responder
-            }
+        return revocationStatus(DefaultOcsp.CHECKER, leaf, issuer);
+    }
+
+    /** [checker]'s answer as the {@link RevocationCheck} string ("good" | "revoked" | "unknown"). */
+    static String revocationStatus(OcspRevocationChecker checker, Cert leaf, Cert issuer) {
+        try {
+            RevocationStatus s = checker.check(leaf.x509, issuer.x509);
+            return s == RevocationStatus.GOOD ? "good" : s == RevocationStatus.REVOKED ? "revoked" : "unknown";
+        } catch (EidException e) {
+            return "unknown";
         }
-        return "unknown";
     }
 
     private static final class Checked {

@@ -7,11 +7,11 @@ import java.util.List;
  * Wire vectors: one RP-API call each — the SDK operation and its input, the expected HTTP method / path / query /
  * request-body JSON (compared semantically), a canned response, and the expected parsed result (or typed error).
  *
- * <p>TODO(rp-conformance-v1): the cross-SDK conformance corpus (plan WP 0) is being generated in the Go repo under
- * {@code testdata/conformance} (tag {@code rp-conformance-v1}). When it is published, vendor it unedited under
- * src/test/resources/conformance via a sync script in --check mode (like scripts/sync-pades-golden.sh), pin its
- * SHA-256, add a {@link Source} that maps its manifest onto {@link Vector} and list it in {@link WireVectorTest#SOURCES}.
- * Until then {@link #LOCAL} carries hand-ported cases from the Go/TS test suites (each names its source test).
+ * <p>{@link #LOCAL} carries hand-ported cases from the Go/TS test suites (each names its source test). The cross-SDK
+ * conformance corpus (Go testdata/conformance, vendored unedited under src/test/resources/conformance by
+ * scripts/sync-conformance.sh) has its own wire format (README §wire: exact path + query, headers, volatile values,
+ * a whole-result expectation); {@link ConformanceTest#wire} runs it through the same operation map
+ * ({@link WireVectorTest#OPS}).
  */
 final class WireVectors {
     private WireVectors() {

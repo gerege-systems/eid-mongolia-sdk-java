@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * Cross-reference structure of a PDF (classic tables, xref streams, hybrid files, object streams) + indirect object

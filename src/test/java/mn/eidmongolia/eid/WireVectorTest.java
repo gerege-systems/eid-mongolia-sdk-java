@@ -23,10 +23,10 @@ import org.junit.Test;
 /**
  * Every RP-API method of this package against wire vectors ({@link WireVectors}): HTTP method, path, query and the
  * request-body JSON (semantic), then the canned response's parsed result or typed error. The vectors name their Go/TS
- * source test; the conformance corpus plugs in through {@link #SOURCES}.
+ * source test; the conformance corpus runs through {@link #OPS} in {@link ConformanceTest}.
  */
 public class WireVectorTest {
-    /** TODO(rp-conformance-v1): add the vendored conformance corpus source here (see {@link WireVectors}). */
+    /** The local vectors; the conformance corpus runs in {@link ConformanceTest#wire} with {@link #OPS}. */
     static final List<WireVectors.Source> SOURCES = List.of(WireVectors.LOCAL);
 
     /** op name → the call (client, input) → result. */

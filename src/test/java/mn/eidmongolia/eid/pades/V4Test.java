@@ -16,6 +16,10 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.zip.Deflater;
+import mn.eidmongolia.eid.internal.Asn1Time;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 import org.junit.Test;
 
 /**

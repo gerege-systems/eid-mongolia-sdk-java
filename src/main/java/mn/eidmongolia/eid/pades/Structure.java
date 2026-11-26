@@ -11,6 +11,7 @@ import java.util.TreeSet;
 import java.util.regex.Pattern;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * PRECHECKS #2a / #2b — Go reference `validate.CheckStructure` (nesting.go + objstm.go, incl. the 2026-11-04 ObjStm
