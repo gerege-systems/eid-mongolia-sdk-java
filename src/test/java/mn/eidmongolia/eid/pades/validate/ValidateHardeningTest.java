@@ -465,7 +465,7 @@ public class ValidateHardeningTest {
     // 12 — later-signature trust (Go extract.go known/metas, appearance.go /Name): corpus v14 inputs
 
     @Test
-    public void laterSignatureMustVerifyToExtend() {
+    public void laterSignatureMustVerifyToExtend() throws Exception {
         byte[] d = res("validate/input/later-sig-integrity-failed.pdf");
         Extract.Extracted ex = Extract.extract(d, NO_STAMPS);
         assertEquals(2, ex.sigs.size());
@@ -480,7 +480,7 @@ public class ValidateHardeningTest {
     }
 
     @Test
-    public void laterStampNameMustBeTheCertificateName() {
+    public void laterStampNameMustBeTheCertificateName() throws Exception {
         byte[] control = res("validate/input/later-stamp-name-control.pdf");
         byte[] mismatch = res("validate/input/later-stamp-name-mismatch.pdf");
         // mismatch: the later signature verifies, but its /Name (and stamp) say GOLDEN TESTOV while its certificate is
