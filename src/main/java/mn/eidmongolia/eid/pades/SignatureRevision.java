@@ -116,7 +116,7 @@ final class SignatureRevision {
             page = new Object[] {loc.page, loc.pageRef};
             placement = loc.result;
             List<byte[]> bodies = Appearance.objects(
-                new Appearance.Params((int) vis.w, (int) vis.h, loc.rot, vis.name, vis.role, vis.lang, vis.date, vis.url), apIds);
+                new Appearance.Params((int) vis.w, (int) vis.h, loc.rot, vis.name, vis.role, vis.lang, vis.date, vis.url, vis.seal), apIds);
             inc.writeObject(fieldId, Appearance.widget(fieldName, loc.rect, loc.pageRef, sigId, apIds[0]));
             for (int i = 0; i < bodies.size(); i++) inc.writeObject(apIds[i], bodies.get(i));
         }

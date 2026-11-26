@@ -34,10 +34,19 @@ public final class Completed {
     private final List<String> priorRevisionSha256;
     private final String fileName;
     private final String claimedRole;
+    private final Placement placement;
 
     Completed(byte[] pdf, byte[] cms, String docId, String outSha256, String inSha256, boolean hasPage, String pageSha256,
               byte[] signerCert, int revIndex, String sigRevSha256, List<String> priorCmsSha256, List<String> priorRevisionSha256,
               String fileName, String claimedRole) {
+        this(pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, signerCert, revIndex, sigRevSha256, priorCmsSha256,
+            priorRevisionSha256, fileName, claimedRole, null);
+    }
+
+    private Completed(byte[] pdf, byte[] cms, String docId, String outSha256, String inSha256, boolean hasPage, String pageSha256,
+                      byte[] signerCert, int revIndex, String sigRevSha256, List<String> priorCmsSha256, List<String> priorRevisionSha256,
+                      String fileName, String claimedRole, Placement placement) {
+        this.placement = placement;
         this.pdf = pdf;
         this.cms = cms;
         this.docId = docId;
@@ -116,6 +125,20 @@ public final class Completed {
 
     public String claimedRole() {
         return claimedRole;
+    }
+
+    /**
+     * Where the visible organisation seal stamp was drawn — filled by {@link EidPades#sealPdf} only (null when the seal
+     * is invisible). In the citizen flow it is {@link Prepared#placement()}; {@link EidPades#complete} leaves it null.
+     */
+    public Placement placement() {
+        return placement;
+    }
+
+    /** This result with [p] as {@link #placement()} (Go SealPDF: res.Placement = p.Placement). */
+    Completed withPlacement(Placement p) {
+        return new Completed(pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, signerCert, revIndex, sigRevSha256, priorCmsSha256,
+            priorRevisionSha256, fileName, claimedRole, p);
     }
 
     /** {@link #registration(Medium, String, String)} with the medium inferred from sessionId. */

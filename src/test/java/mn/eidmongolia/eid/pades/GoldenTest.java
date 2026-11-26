@@ -31,6 +31,7 @@ import org.junit.Test;
 public class GoldenTest {
     private final Json.Obj m = Golden.manifest();
     private final byte[] citizen = Golden.pem("pki/citizen.pem");
+    private final byte[] seal = Golden.pem("pki/seal.pem");
     private final List<byte[]> chain = Arrays.asList(Golden.pem("pki/04.pem"), Golden.pem("pki/03.pem"), Golden.pem("pki/02.pem"));
     private final byte[] root = Golden.pem("pki/root.pem");
 
@@ -63,7 +64,12 @@ public class GoldenTest {
             Json.Obj ap = p.optObj("appearance");
             SignatureAppearance appearance = ap == null ? null : new SignatureAppearance(ap.optInt("page", 0), ap.getDouble("x"),
                 ap.getDouble("y"), ap.getDouble("width"), ap.getDouble("height"), ap.optNonEmpty("lang"), ap.optBool("exact", false));
-            PrepareOptions opts = PrepareOptions.builder(citizen).chain(chain).signingTime(signingTime)
+            // golden v12/v13: "signer": "seal" = pki/seal.pem (organisation e-Seal → seal stamp, APPEARANCE_SPEC.md §6);
+            // "sealQr" = the unexported QR seal stamp variant (§6.5), enabled internally for exactly these cases.
+            String signer = c.optString("signer");
+            byte[] signerCert = signer.isEmpty() ? citizen : seal;
+            if (!signer.isEmpty() && !signer.equals("seal")) throw new IllegalStateException(name + ": signer " + signer);
+            PrepareOptions opts = PrepareOptions.builder(signerCert).sealQr(c.optBool("sealQr", false)).chain(chain).signingTime(signingTime)
                 .signerName(p.optNonEmpty("signerName")).reason(p.optNonEmpty("reason")).claimedRole(p.optNonEmpty("claimedRole"))
                 .docId(p.optNonEmpty("docId")).verifyPage(p.optBool("verifyPage", false)).fileName(p.optNonEmpty("fileName"))
                 .lang(p.optNonEmpty("lang")).verifyPagePosition(p.optNonEmpty("verifyPagePosition")).appearance(appearance).build();
@@ -159,6 +165,13 @@ public class GoldenTest {
         assertTrue("no complete case ran", okCases > 0);
         assertEquals("completed cases", okCases, completed);
         assertTrue("golden v7 exact cases", exactCases >= 5);
+        int sealCases = 0;
+        int sealQrCases = 0;
+        for (Json.Obj c : cases) {
+            if (c.optString("signer").equals("seal")) sealCases++;
+            if (c.optBool("sealQr", false)) sealQrCases++;
+        }
+        assertTrue("golden v12/v13 seal cases", sealCases >= 8 && sealQrCases >= 5);
 
         // Visible signature on a signed document without a verify page (no docId) → REQUEST_INVALID.
         byte[] noPage = outputs.get("quartz-pdf13-nopage");

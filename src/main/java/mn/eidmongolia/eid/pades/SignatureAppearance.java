@@ -3,7 +3,8 @@ package mn.eidmongolia.eid.pades;
 /**
  * Visible signature placement — Go reference {@code pades.Appearance} (APPEARANCE_SPEC.md §1). Coordinates in pt from the
  * bottom-left corner of the page's CropBox (else MediaBox) AFTER /Rotate (as displayed); x to the right, y up. Each value
- * is rounded to 0.01 pt; height ≥ 45 pt (QR), else REQUEST_INVALID.
+ * is rounded to 0.01 pt; height ≥ 45 pt (QR), else REQUEST_INVALID — the QR-less organisation seal stamp
+ * (APPEARANCE_SPEC.md §6.2) only needs its text to fit (≈ 29.25 pt for a one-line name).
  *
  * @param page   input document page, 1-based; 0 → the input's last page that is not an eID verify page (PLACEMENT_SPEC §1a)
  * @param lang   "mn" | "en"; null → {@link PrepareOptions#lang()} (else mn)
