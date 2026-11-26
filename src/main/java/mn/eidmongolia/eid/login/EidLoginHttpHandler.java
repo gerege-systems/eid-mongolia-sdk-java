@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -19,17 +20,29 @@ import java.util.function.Function;
  * <pre>{@code
  * HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
  * server.createContext("/auth/eid/", new EidLoginHttpHandler(login, EidLoginHttpHandler.ClientIp.direct()));
+ * // REQUIRED: without an executor the JDK runs every exchange on its single dispatcher thread — one slow client or
+ * // one status long-poll stalls every sign-in.
+ * server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());     // Java 21+
+ * // Java 17: a bounded pool, e.g. Executors.newFixedThreadPool(64)
+ * server.start();
  * }</pre>
  *
- * The client IP for the {@code start:<ip>} limit is chosen EXPLICITLY: {@link ClientIp#direct()} (the socket peer — no
+ * The handler logs a one-time warning when its server has no executor. The JDK server has no read deadline by default:
+ * start the JVM with {@code -Dsun.net.httpserver.maxReqTime=10 -Dsun.net.httpserver.maxRspTime=30} (seconds) or put a
+ * reverse proxy with request timeouts in front, so a client that sends its headers / body slowly cannot hold a thread
+ * (the exchange API gives the handler no socket timeout of its own).
+ *
+ * <p>The client IP for the {@code start:<ip>} limit is chosen EXPLICITLY: {@link ClientIp#direct()} (the socket peer — no
  * proxy in front), {@link ClientIp#trustedProxies(int)} (behind n trusted reverse proxies; X-Forwarded-For from the
- * right) or {@link ClientIp#none()} (no per-IP limit). Bodies are read up to 4 KiB + 1 (a larger start body is
- * {@code invalid_body}).
+ * right; an address that cannot be derived counts in one shared {@code start:unknown} bucket) or {@link ClientIp#none()}
+ * (no per-IP limit). Bodies are read up to 4 KiB + 1 (a larger start body is {@code invalid_body}).
  */
 public final class EidLoginHttpHandler implements HttpHandler {
     private static final int DRAIN_BYTES = 64 << 10;
+    private static final System.Logger LOG = System.getLogger("mn.eidmongolia.eid.login");
     private final EidLogin login;
     private final ClientIp clientIp;
+    private final AtomicBoolean warnedNoExecutor = new AtomicBoolean();
 
     /** Where the client IP comes from. */
     public static final class ClientIp {
@@ -68,6 +81,10 @@ public final class EidLoginHttpHandler implements HttpHandler {
     @Override
     public void handle(HttpExchange x) throws IOException {
         try {
+            if (x.getHttpContext().getServer().getExecutor() == null && warnedNoExecutor.compareAndSet(false, true)) {
+                LOG.log(System.Logger.Level.WARNING, "eidlogin: HttpServer-т executor алга — бүх хүсэлт нэг dispatcher thread дээр; "
+                    + "server.setExecutor(...) өг (Java 21+: Executors.newVirtualThreadPerTaskExecutor())");
+            }
             byte[] body;
             try (InputStream in = x.getRequestBody()) {
                 body = in.readNBytes(EidLogin.MAX_START_BODY + 1);
@@ -78,7 +95,9 @@ public final class EidLoginHttpHandler implements HttpHandler {
             Map<String, List<String>> headers = x.getRequestHeaders();
             EidLoginRequest r = new EidLoginRequest(x.getRequestMethod(), url, headers, body, null);
             String ip = clientIp.socket != null ? clientIp.socket.apply(x) : clientIp.headers != null ? clientIp.headers.apply(r) : null;
-            if (ip != null && !ip.isEmpty()) r = new EidLoginRequest(r.method(), r.url(), r.headers(), r.rawBody(), ip);
+            // direct / trustedProxies that could not derive an address: the shared fail-closed bucket, never "no limit".
+            if (ip != null && ip.isBlank()) ip = EidLogin.UNKNOWN_IP;
+            if (ip != null) r = new EidLoginRequest(r.method(), r.url(), r.headers(), r.rawBody(), ip);
             EidLoginResponse res = login.handle(r);
             for (Map.Entry<String, List<String>> e : res.headers().entrySet()) {
                 for (String v : e.getValue()) x.getResponseHeaders().add(e.getKey(), v);

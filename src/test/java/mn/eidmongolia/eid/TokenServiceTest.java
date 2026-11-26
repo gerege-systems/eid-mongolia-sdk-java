@@ -305,7 +305,7 @@ public class TokenServiceTest {
             {"default issuer allowlist", chal, cert, sig, TrustConfig.builder().trustAnchorsPem(CA.pem()).build(), ValidationReasons.ISSUER_NOT_ALLOWED},
             {"no anchor", chal, cert, sig, null, ValidationReasons.TRUST_NO_ANCHOR},
             {"sign certificate", chal, signCert, rawSig(sk, chal), okTrust, ValidationReasons.PURPOSE_AUTH_CLIENT_AUTH},
-            {"two SERIALNUMBERs", chal, dupCert, rawSig(dk, chal), okTrust, ValidationReasons.CERT_SUBJECT_AMBIGUOUS},
+            {"two SERIALNUMBERs", chal, dupCert, rawSig(dk, chal), okTrust, ValidationReasons.SUBJECT_DUPLICATE_IDENTITY},
         };
         for (Object[] c : cases) {
             FakeRp x = FakeRp.reply(200, ok);

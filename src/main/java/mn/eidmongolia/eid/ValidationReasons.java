@@ -93,9 +93,10 @@ public final class ValidationReasons {
 
     /**
      * The certificate subject has more than one SERIALNUMBER or more than one CN — the identity would depend on which
-     * one a parser picks (cross-SDK hardening, rejected before any other certificate check).
+     * one a parser picks (cross-SDK hardening, rejected before any other certificate check). Same key as the .NET SDK
+     * ({@code subject.duplicate_identity}); not yet in the rp-conformance corpus.
      */
-    public static final String CERT_SUBJECT_AMBIGUOUS = "cert.subject_ambiguous";
+    public static final String SUBJECT_DUPLICATE_IDENTITY = "subject.duplicate_identity";
     /** A seal / seal-request / seal-grant response lacks a required member or does not decode. */
     public static final String SEAL_RESPONSE = "seal.response";
     /** The seal response's certificate is not an e-Seal certificate (KeyUsage = nonRepudiation only, no EKU). */

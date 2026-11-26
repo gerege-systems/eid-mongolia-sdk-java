@@ -18,7 +18,7 @@
 - Аюулгүйн чангаруулалт (Go/TS-ээс хатуу, cross-SDK): `OcspRevocationChecker` leaf-ийг өгсөн issuer гаргасан эсэхийг
   кэш ба сүлжээнээс ӨМНӨ шалгана (үгүй бол `no_issuer`), CertID issuer-hash холбоос анхдагчаар асаалттай
   (`bindCertId(false)`-оор Go/TS-ийн дүрэм) — corpus-ийн 17 OCSP кейс ногоон; subject-д SERIALNUMBER эсвэл CN нэгээс
-  олон бол validator `cert.subject_ambiguous` (шинэ тогтвортой түлхүүр), «Миний QR» `QR_CHAIN_INVALID`.
+  олон бол validator `subject.duplicate_identity` (шинэ тогтвортой түлхүүр), «Миний QR» `QR_CHAIN_INVALID`.
 - Яагаад: Java SDK-г Go/TS-тэй ижил хүрээтэй RP SDK болгох тав дахь багц (WP 5).
 - Хаана: `src/main/java/mn/eidmongolia/eid/{Organization,Person,Seal,Token,Share,Qr}Service.java` + DTO record-ууд,
   `…/pades/{Sealer,SealOptions,EidPades}.java`, `OcspRevocationChecker.java`, `ResponseValidator.java`.

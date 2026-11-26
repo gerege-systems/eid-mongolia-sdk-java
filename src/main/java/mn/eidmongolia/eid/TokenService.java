@@ -2,7 +2,6 @@ package mn.eidmongolia.eid;
 
 import java.math.BigInteger;
 import java.security.MessageDigest;
-import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -14,6 +13,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 import mn.eidmongolia.eid.internal.Cert;
 import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Sig;
 
 /**
  * The citizen's USB token (PKCS#11, EC P-256) — {@link EidClient#token()}, Go {@code TokenService}, TS {@code TokenApi}:
@@ -263,14 +263,9 @@ public final class TokenService {
         if (!crt.isEc() || !Prehashed.isP256(crt.publicKey()) || sig.length != 64) return false;
         BigInteger r = new BigInteger(1, java.util.Arrays.copyOfRange(sig, 0, 32));
         BigInteger s = new BigInteger(1, java.util.Arrays.copyOfRange(sig, 32, 64));
-        try {
-            Signature v = Signature.getInstance("NONEwithECDSA");
-            v.initVerify(crt.publicKey());
-            v.update(digest);
-            return v.verify(derSignature(r, s));
-        } catch (Exception e) {
-            return false;
-        }
+        // 0 < r, s < n before the JDK sees them (CVE-2022-21449 class); Sig.verify checks the DER form again.
+        if (!Sig.ecdsaInRange((java.security.interfaces.ECPublicKey) crt.publicKey(), r, s)) return false;
+        return Sig.verify("NONEwithECDSA", crt.publicKey(), digest, derSignature(r, s));
     }
 
     private static byte[] derSignature(BigInteger r, BigInteger s) {

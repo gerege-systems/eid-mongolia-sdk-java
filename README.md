@@ -203,7 +203,6 @@ byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                   
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: үндэсний root-тэй TrustConfig)
     .callbackUrl("https://bank.mn/auth/eid/callback")      // Web2App; зам яг /auth/eid/callback
     .failureRedirect("/login")
-    .clientIp(EidLogin.forwardedClientIp(1))               // НЭГ итгэмжит proxy-ийн ард; эс бөгөөс бүү өг
     .onSuccess((id, req) -> {                              // id.etsi() = PNOMN-…; ШИНЭ session үүсгэ
         String sid = sessions.create(id.etsi());
         return new EidLoginSuccess("/home", null, Map.of("Set-Cookie", List.of("sid=" + sid + "; Path=/; HttpOnly; Secure; SameSite=Lax")));
@@ -211,32 +210,69 @@ EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (
     .build();
 
 // JDK com.sun.net.httpserver
+HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
 server.createContext("/auth/eid/", new EidLoginHttpHandler(login, EidLoginHttpHandler.ClientIp.direct()));
+server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());   // Java 21+ — ЗААВАЛ (доор)
+// server.setExecutor(Executors.newFixedThreadPool(64));           // Java 17: хязгаартай pool
+server.start();
+// JVM (секунд): -Dsun.net.httpserver.maxReqTime=10 -Dsun.net.httpserver.maxRspTime=30 — эсвэл timeout-тэй reverse proxy
 
 // Servlet (jakarta.servlet) — /auth/eid/* руу
 protected void service(HttpServletRequest rq, HttpServletResponse rs) throws IOException {
     Map<String, List<String>> h = new HashMap<>();
     for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
     String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
-    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h,
-        rq.getInputStream().readNBytes(4097), rq.getRemoteAddr()));   // getRemoteAddr: урд нь proxy байхгүй үед л
+    byte[] body = rq.getInputStream().readNBytes(4097);          // дээд тал нь 4 KiB + 1 — илүүг EidLogin татгалзана
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
     rs.setStatus(r.status());
     r.headers().forEach((k, vs) -> vs.forEach(v -> rs.addHeader(k, v)));
     rs.getOutputStream().write(r.body().getBytes(StandardCharsets.UTF_8));
 }
 
-// Spring MVC
+// Spring MVC — биеийг өөрөө, хязгаартай уншина (хязгааргүй @RequestBody byte[] БҮҮ хэрэглэ)
 @RequestMapping("/auth/eid/{op}")
-ResponseEntity<String> eid(HttpServletRequest rq, @RequestBody(required = false) byte[] body) {
+ResponseEntity<String> eid(HttpServletRequest rq) throws IOException {
     Map<String, List<String>> h = new HashMap<>();
     for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
     String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    byte[] body = rq.getInputStream().readNBytes(4097);
     EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
     HttpHeaders out = new HttpHeaders();
     r.headers().forEach(out::addAll);
     return new ResponseEntity<>(r.body(), out, HttpStatus.valueOf(r.status()));
 }
 ```
+
+**Thread.** `handle` блоклоно: status дуудлага thread-ээ `poll` хүртэл барина (анхдагч 1 с; нэг нэвтрэлтэд нэг удаад
+нэг — ижил нэвтрэлтийн зэрэг ирсэн status шууд `PENDING` буцаана), push эхлэл 1 с доод хугацаанаас багагүй. Virtual thread
+(Java 21+) эсвэл зэрэг нэвтрэлтийн тоонд тохирсон хязгаартай pool хэрэглэ. JDK `HttpServer` `setExecutor`-гүй бол бүх
+хүсэлтийг НЭГ dispatcher thread дээр ажиллуулна — нэг удаан эсвэл давтагдсан клиент бүх нэвтрэлтийг зогсооно (handler нэг
+удаа анхааруулга бичнэ). JDK сервер анхдагчаар унших deadline-гүй: `sun.net.httpserver.maxReqTime` / `maxRspTime`
+(секунд) тохируул, эсвэл урд нь request timeout-тэй reverse proxy тавь.
+
+**`start:<ip>` хязгаарын клиент IP — доорхоос яг НЭГИЙГ сонго.**
+
+*A — клиент шууд холбогдоно (proxy-гүй):* builder-т `.clientIp(...)` БҮҮ дууд. Adapter socket-ийн хаягийг дамжуулна:
+`EidLoginHttpHandler.ClientIp.direct()`, Servlet / Spring `rq.getRemoteAddr()` (дээрх шиг).
+
+*B — N итгэмжит reverse proxy-ийн ард (ганц nginx = 1):*
+
+```java
+EidLogin login = EidLogin.builder(eid)
+    .clientIp(EidLogin.forwardedClientIp(1))               // X-Forwarded-For, баруунаас 1 дэх утга
+    // … дээрхтэй адил
+    .build();
+// JDK: ClientIp.trustedProxies(1) adapter-т мөн адил (тэгвэл builder-ийн clientIp-ийг бүү өг)
+```
+
+> **Анхааруулга:** builder-ийн `.clientIp(...)` нь adapter-ийн дамжуулсан хаягийг ДАРНА. B-г proxy-гүй орчинд хуулбал
+> клиент бүр `X-Forwarded-For`-оор өөрийн хязгаарын түлхүүрийг сонгоно. Гаргаж чадаагүй хаяг (тохируулснаас богино proxy
+> гинж) нэг хуваалцсан `start:unknown` хувинд тоологдоно; IPv6 клиентийг /64-өөр нь түлхүүрлэнэ. IP-ийн эх сурвалж огт
+> байхгүй бол IP-ийн хязгаар унтарч, нэг удаа анхааруулга бичигдэнэ.
+
+Дугаар тутмын push хязгаар (дугаарт минутад 3) зөвхөн дугаараар түлхүүрлэгдэнэ: иргэний регистрийн дугаарыг мэдсэн хэн ч
+цонхыг дуусгаж тэр иргэний **push** нэвтрэлтийг минут хүртэл хойшлуулж чадна — дугаараар push хийхийн мөн чанар; QR ба
+Web2App-д нөлөөлөхгүй.
 
 ## Хөгжүүлэлт
 

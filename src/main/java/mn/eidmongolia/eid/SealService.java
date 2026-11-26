@@ -1,6 +1,5 @@
 package mn.eidmongolia.eid;
 
-import java.security.Signature;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
@@ -11,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
 import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Sig;
 import mn.eidmongolia.eid.pades.Sealer;
 
 /**
@@ -159,7 +159,7 @@ public final class SealService implements Sealer {
      * or neither: docId null/"" with revIndex 0 sends neither. Not in the Go / TS SDKs yet.
      *
      * @param docId a lowercase UUID
-     * @param revIndex the signature's position in the document (1…)
+     * @param revIndex the signature's position in the document (1…16, the CA's bound)
      * @throws IllegalArgumentException a bad digest length, or docId / revIndex not both valid (no request is sent)
      */
     public SealResult seal(String orgEtsi, byte[] digest, HashAlgorithm hash, String docId, int revIndex) {
@@ -169,8 +169,8 @@ public final class SealService implements Sealer {
             throw new IllegalArgumentException("eid: digest нь " + h.wireName() + "-ийн урт (" + size + " байт) байх ёстой");
         }
         boolean ref = docId != null && !docId.isEmpty();
-        if (ref != (revIndex != 0) || (ref && (!UUID_LOWER.matcher(docId).matches() || revIndex < 1))) {
-            throw new IllegalArgumentException("eid: seal: docId (жижиг үсгийн UUID) ба revIndex (≥ 1) хоёулаа эсвэл аль нь ч үгүй");
+        if (ref != (revIndex != 0) || (ref && (!UUID_LOWER.matcher(docId).matches() || revIndex < 1 || revIndex > PdfService.MAX_REV_INDEX))) {
+            throw new IllegalArgumentException("eid: seal: docId (жижиг үсгийн UUID) ба revIndex (1…16) хоёулаа эсвэл аль нь ч үгүй");
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("digest", Base64.getEncoder().encodeToString(digest));
@@ -204,16 +204,9 @@ public final class SealService implements Sealer {
             Dto.instant(r, "sealedAt", "POST /seal/…"), Dto.raw(res));
     }
 
-    /** Go {@code ecdsa.VerifyASN1}: a DER (r, s) over the prehashed digest. */
+    /** Go {@code ecdsa.VerifyASN1}: a DER (r, s), 0 < r, s < n, over the prehashed digest ({@link Sig#verify}). */
     private static boolean verifyEcdsaDer(Cert c, byte[] digest, byte[] sig) {
-        try {
-            Signature v = Signature.getInstance("NONEwithECDSA");
-            v.initVerify(c.publicKey());
-            v.update(digest);
-            return v.verify(sig);
-        } catch (Exception e) {
-            return false;
-        }
+        return Sig.verify("NONEwithECDSA", c.publicKey(), digest, sig);
     }
 
     /**

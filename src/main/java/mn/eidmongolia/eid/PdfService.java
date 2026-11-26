@@ -13,6 +13,8 @@ import mn.eidmongolia.eid.pades.Registration;
  * {@code SignApi.registerSignature}).
  */
 public final class PdfService {
+    /** The CA's revIndex bound (1…16, the same as the 16-signature PAdES limit). */
+    static final int MAX_REV_INDEX = 16;
     private final RpHttp http;
     private final Duration timeout;
 
@@ -31,13 +33,13 @@ public final class PdfService {
      * {@link Registration#priorSignatures()} covers every prior signature and no priorRevisionSha256 was given, the
      * combinations are tried (first k by revision, then — up to 4 priors — every other split), as Go / TS do.
      *
-     * @throws IllegalArgumentException a missing docID / revIndex / cms / medium, phone without sessionID, revIndex 1
+     * @throws IllegalArgumentException a missing docID / revIndex (or one outside 1…16) / cms / medium, phone without sessionID, revIndex 1
      *     without pageSha256 (no request is sent)
      * @throws EidException.Api code ∈ {@link EidErrorCodes#PDF_REGISTER} (also {@link EidException.Forbidden})
      */
     public PdfSignatureRegistered registerSignature(Registration r) {
-        if (r == null || r.docID() == null || r.docID().isEmpty() || r.revIndex() < 1 || r.cms() == null || r.cms().isEmpty()) {
-            throw new IllegalArgumentException("eid: pdf register: docID, revIndex, cms заавал");
+        if (r == null || r.docID() == null || r.docID().isEmpty() || r.revIndex() < 1 || r.revIndex() > MAX_REV_INDEX || r.cms() == null || r.cms().isEmpty()) {
+            throw new IllegalArgumentException("eid: pdf register: docID, revIndex (1…" + MAX_REV_INDEX + "), cms заавал");
         }
         if (r.medium() == null) throw new IllegalArgumentException("eid: pdf register: medium нь phone | token");
         if (r.medium() == Medium.PHONE && (r.sessionID() == null || r.sessionID().isEmpty())) {
