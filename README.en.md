@@ -109,7 +109,7 @@ and use `getMessage()` for logs only. `retryable()` — a transient TSA/LTV erro
 
 | Code | Meaning |
 |---|---|
-| `PDF_INVALID` | the PDF cannot be parsed; structure too deep (nesting > 256), an ObjStm cycle, `/Extends` > 64, `/Size` > 2^21 (PRECHECKS #2a/#2b) |
+| `PDF_INVALID` | the PDF cannot be parsed; structure too deep (nesting > 256), an ObjStm cycle, `/Extends` > 64, `/Size` > 2^21, > 128 xref sections, xref-stream `/W` / `/Index` / rows > 2^21, object-stream work > 1 GiB (PRECHECKS #2a/#2b) |
 | `PDF_ENCRYPTED` | an encrypted PDF |
 | `PDF_LOCKED` | DocMDP P=1 — modification is forbidden |
 | `PDF_TOO_LARGE` | larger than 9.75 MiB (input) / 10 MiB (output) |
@@ -365,8 +365,17 @@ appended changes → `modified_after_signing`; visible stamps per APPEARANCE_SPE
 `offline(false)` also AIA OCSP / CDP CRL), LTV, `PAdES-BASELINE-B/T/LT`, `certificate_level`. Options: `roots`,
 `intermediates`, `issuers`, `time`, `offline`, `transport` (`EidPadesTransport`). The document never leaves the process —
 only certificate serials (OCSP). Errors: `ValidatePdfException.code()` = `PDF_TOO_LARGE` / `PDF_INVALID` /
-`PDF_ENCRYPTED` / `PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Bounded for hostile PDFs: 10 MiB, 16
-signatures, nesting / object / inflate / xref-chain limits.
+`PDF_ENCRYPTED` / `PDF_NO_SIGNATURE` / `PDF_TOO_MANY_SIGNATURES` / `REQUEST_INVALID`. Bounded for hostile PDFs (same as
+Go / TS, corpus v14): 10 MiB, 16 signatures, nesting ≤ 256; ≤ 128 xref sections (`trailer` dictionaries + `/Type /XRef`
+dictionaries), each xref-stream `/W` entry 0…8 with a row width > 0, `/Index` start + count ≤ 2^21, ≤ 2^21 xref-stream rows
+in total, a single filter on xref / object streams, inflated xref + object streams ≤ 32 MiB together, object-stream member
+lookup work (header pairs × inflated length) ≤ 1 GiB in total — beyond any of these `PDF_INVALID`; ≤ 32 certificates per
+CMS or timestamp token, RSA ≤ 8192 bits, e ≤ 2^32−1, certificate / TSTInfo serial ≤ 160 bits (else
+`malformed_signature`); DSS ≤ 8 MiB decoded in total (a stream referenced twice in one array is read once).
+**Integrator-visible:** a document with more than 128 incremental updates or very many object-stream members →
+`PDF_INVALID`; when a later signature's visible stamp has a `/Name` different from that signature's certificate name
+(GIVENNAME SURNAME, else CN), or that signature fails integrity, the earlier signatures are `modified_after_signing`; an
+MD2/MD5/SHA-1 SignerInfo signature algorithm → `weak_algorithm`.
 
 ### «Sign in with eID» button backend (`mn.eidmongolia.eid.login`)
 
