@@ -83,7 +83,7 @@ public final class EidClient {
         DeviceLink.Sleeper sleeper = b.sleeper != null ? b.sleeper : d -> Thread.sleep(d.toMillis(), d.toNanosPart() % 1_000_000);
         this.organization = new OrganizationService(http);
         this.person = new PersonService(http);
-        this.seal = new SealService(http, clock, sleeper);
+        this.seal = new SealService(http, clock, sleeper, pdfTimeout);
         this.token = new TokenService(http, credentials, validator);
         this.qr = new QrService(http, credentials, session, clock, b.qrIssuer, b.qrTrust);
         this.share = new ShareService(http);

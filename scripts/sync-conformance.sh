@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # sync-conformance.sh — Go reference-ийн (gerege-systems/eid-mongolia-sdk-go) RP SDK conformance corpus-ийг
-# (testdata/conformance, rp-conformance/1) src/test/resources/conformance руу байт-ижил vendor хийнэ.
+# (testdata/conformance, rp-conformance/N) src/test/resources/conformance руу байт-ижил vendor хийнэ.
 #
 #   scripts/sync-conformance.sh <ref>       # Go репогийн tag/commit-оос татаж бичнэ (жишээ: rp-conformance-v1)
 #   scripts/sync-conformance.sh --check     # vendored хуулбар conformance/SOURCE-ийн ref-тэй таарч буйг шалгана (CI)

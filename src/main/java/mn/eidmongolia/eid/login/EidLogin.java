@@ -50,7 +50,7 @@ import mn.eidmongolia.eid.VerifiedIdentity;
 /**
  * «Sign in with eID» button backend — framework neutral (Go {@code eidlogin.Handler}, TS {@code createEidLogin} /
  * {@code handleRequest}). The browser side is the TS SDK's {@code <eid-login-button>}; the JSON shapes, cookie and status
- * codes are the same as Go / TS (conformance corpus {@code eidlogin/1}).
+ * codes are the same as Go / TS (conformance corpus {@code eidlogin/2}).
  *
  * <pre>
  *   POST {base}/start   {"mode":"qr"} | {"mode":"push","idCode":"УБ12345678"} → {mode, vc, qr?, expiresIn}
@@ -85,6 +85,11 @@ public final class EidLogin {
     public static final Duration DEFAULT_POLL = Duration.ofSeconds(1);
     /** The default push answer floor. */
     public static final Duration DEFAULT_PUSH_FLOOR = Duration.ofSeconds(1);
+
+    /** The default login cookie name when the cookie is Secure, has no Domain and Path is "/" (rp-conformance/2). */
+    public static final String HOST_COOKIE_NAME = "__Host-eid_login";
+    /** The default login cookie name otherwise (insecure dev cookie, a Domain, or another Path). */
+    public static final String PLAIN_COOKIE_NAME = "eid_login";
 
     static final int MAX_START_BODY = 4 << 10;
     static final int LIMITER_MAX_KEYS = 10_000;
@@ -156,11 +161,23 @@ public final class EidLogin {
 
     /**
      * One rate rule (Go {@code RateRule}, TS {@code EidLoginRateRule}): {@code func} when given (Redis …); else a memory
-     * sliding window of {@code max} per key per {@code window}; max ≤ 0 and no func = unlimited.
+     * sliding window of {@code max} per key per {@code window}; max ≤ 0 and no func = unlimited. {@code maxKeys} — the
+     * memory window's table size (≤ 0 = 10 000): when full, NEW keys are counted in one shared overflow bucket (same max
+     * and window); existing counters are never evicted (Go {@code RateRule.MaxKeys}).
      */
-    public record RateRule(int max, Duration window, Predicate<String> func) {
+    public record RateRule(int max, Duration window, Predicate<String> func, int maxKeys) {
+        /** The 0.2.0 constructor (default table size). */
+        public RateRule(int max, Duration window, Predicate<String> func) {
+            this(max, window, func, 0);
+        }
+
         public static RateRule of(int max, Duration window) {
             return new RateRule(max, window, null);
+        }
+
+        /** A memory window with its own table size ({@code maxKeys} ≤ 0 = 10 000). */
+        public static RateRule of(int max, Duration window, int maxKeys) {
+            return new RateRule(max, window, null, maxKeys);
         }
 
         public static RateRule func(Predicate<String> f) {
@@ -172,7 +189,7 @@ public final class EidLogin {
         }
     }
 
-    /** The default limits (new map): start — 20 per 60 s per client IP; push — 3 per 60 s per normalised ID (Go / TS). */
+    /** The default limits (new map): start — 20 per 60 s per client IP; push — 3 per 60 s per normalised ID (keyed by its pushKey). */
     public static Map<String, RateRule> defaultRateLimits() {
         Map<String, RateRule> m = new LinkedHashMap<>();
         m.put("start", RateRule.of(20, Duration.ofMinutes(1)));
@@ -207,10 +224,13 @@ public final class EidLogin {
         poll = positive(b.poll, DEFAULT_POLL);
         clock = b.clock != null ? b.clock : Clock.systemUTC();
         store = b.store != null ? b.store : EidLoginStore.memory(EidLoginStore.MEMORY_MAX, clock);
-        cookieName = b.cookieName == null || b.cookieName.isEmpty() ? "eid_login" : b.cookieName;
         cookiePath = b.cookiePath == null || b.cookiePath.isEmpty() ? "/" : b.cookiePath;
         cookieDomain = b.cookieDomain == null ? "" : b.cookieDomain;
         secureCookie = !b.insecureCookie;
+        // rp-conformance/2 (Go defaultCookieName): the "__Host-" prefix only where browsers accept it (Secure, no Domain,
+        // Path=/) — a cookie planted from a sibling host or another path can then never carry this name.
+        cookieName = b.cookieName != null && !b.cookieName.isEmpty() ? b.cookieName
+            : secureCookie && cookieDomain.isEmpty() && cookiePath.equals("/") ? HOST_COOKIE_NAME : PLAIN_COOKIE_NAME;
         limits = buildLimits(b.rateLimits, clock);
         rateLimitHook = b.rateLimit;
         clientIp = b.clientIp;
@@ -269,7 +289,7 @@ public final class EidLogin {
                 if (r.window() == null || r.window().isZero() || r.window().isNegative()) {
                     throw new IllegalArgumentException("eidlogin: rateLimits[\"" + e.getKey() + "\"].window > 0 байх ёстой");
                 }
-                out.put(e.getKey(), windowLimiter(r.max(), r.window(), LIMITER_MAX_KEYS, clock));
+                out.put(e.getKey(), windowLimiter(r.max(), r.window(), r.maxKeys() > 0 ? r.maxKeys() : LIMITER_MAX_KEYS, clock));
             }
         }
         return out;
@@ -282,7 +302,7 @@ public final class EidLogin {
      * A memory sliding window per key, at most maxKeys keys. When full it drops keys whose window passed; if still full,
      * a NEW key is counted in one shared overflow bucket (same limit and window) instead of every new key being refused —
      * existing counters are never cleared or evicted, so flooding the table cannot reset a victim's push counter (Go
-     * {@code windowLimiter} refuses every new key here).
+     * {@code windowLimiter} v0.32.0 does the same).
      */
     static Predicate<String> windowLimiter(int limit, Duration window, int maxKeys, Clock clock) {
         Map<String, List<Instant>> hits = new LinkedHashMap<>();
@@ -628,7 +648,9 @@ public final class EidLogin {
 
         String ip = startKey(req);
         if (ip != null && !allow("start", ip)) return limited(mode, idCode);
-        if (mode.equals(MODE_PUSH) && !allow("push", idCode)) return limited(mode, idCode);
+        // rp-conformance/2: the push key is the audit HMAC (pushKey), never the ID number — no PII reaches the limiter or a
+        // user hook (Go Start v0.32.0).
+        if (mode.equals(MODE_PUSH) && !allow("push", pushKey(idCode))) return limited(mode, idCode);
 
         String lang = "en".equals(b.lang) ? "eng" : "mon";
         Instant began = clock.instant();
@@ -1318,7 +1340,12 @@ public final class EidLogin {
             return this;
         }
 
-        /** Default eid_login. */
+        /**
+         * The login cookie's name, used as given. Default (after 0.2.x): {@value EidLogin#HOST_COOKIE_NAME} when the
+         * cookie is Secure, has no Domain and Path is "/", else {@value EidLogin#PLAIN_COOKIE_NAME} (0.2.x always used
+         * eid_login — logins in progress during the upgrade restart once). A request carrying the name more than once is
+         * treated as carrying no login cookie.
+         */
         public Builder cookieName(String v) {
             cookieName = v;
             return this;
@@ -1342,11 +1369,13 @@ public final class EidLogin {
         }
 
         /**
-         * Per-kind limits ("start" — key "start:&lt;ip&gt;", "push" — "push:&lt;id&gt;"), MERGED with
+         * Per-kind limits ("start" — key "start:&lt;ip&gt;", "push" — "push:&lt;pushKey&gt;"), MERGED with
          * {@link #defaultRateLimits()}: a given kind replaces its default; {@link RateRule#unlimited()} turns it off.
-         * The per-ID push limit is keyed by the number alone, so anyone who knows a citizen's ID number can use up its
-         * window and delay that citizen's PUSH sign-in for up to a window (inherent to push-by-ID; QR / Web2App are
-         * unaffected).
+         * The push key is the audit {@code pushKey} (32 hex, HMAC of the normalised ID under {@link #auditKey}) — never the
+         * ID number itself (0.2.x used "push:&lt;id&gt;"). The per-ID push limit still means anyone who knows a citizen's
+         * ID number can use up its window and delay that citizen's PUSH sign-in for up to a window (inherent to
+         * push-by-ID; QR / Web2App are unaffected). For a limiter shared by several instances set the same
+         * {@link #auditKey} on all of them.
          *
          * @throws IllegalArgumentException (build) another kind
          */
@@ -1355,7 +1384,10 @@ public final class EidLogin {
             return this;
         }
 
-        /** An extra check for every key ("start:&lt;ip&gt;", "push:&lt;id&gt;"); false → 429. Added ON TOP of the limits. */
+        /**
+         * An extra check for every key ("start:&lt;ip&gt;" — IPv6 by its /64, "start:unknown" when the configured client-IP
+         * source answers empty; "push:&lt;pushKey&gt;" — never the ID number); false → 429. Added ON TOP of the limits.
+         */
         public Builder rateLimit(Predicate<String> v) {
             rateLimit = v;
             return this;

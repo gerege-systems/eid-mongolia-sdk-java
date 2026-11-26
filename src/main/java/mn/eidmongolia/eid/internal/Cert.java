@@ -303,6 +303,35 @@ public final class Cert {
         return v == null ? new byte[0] : Der.parse(v).value();
     }
 
+    /**
+     * The CA's key identifier for issuer allowlists (Go {@code issuerKeyID}, rp-conformance/2): the SKI, or — when the
+     * extension is absent — the RFC 5280 §4.2.1.2 method-1 value SHA-1(subjectPublicKey BIT STRING contents).
+     */
+    public byte[] keyIdentifier() {
+        byte[] ski = subjectKeyId();
+        if (ski.length > 0) return ski;
+        try {
+            return java.security.MessageDigest.getInstance("SHA-1").digest(publicKeyBits);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-1", e);
+        }
+    }
+
+    /** The smallest RSA modulus the SDK accepts for a citizen, CA or OCSP-responder key. */
+    public static final int MIN_RSA_BITS = 2048;
+
+    /**
+     * A weak RSA key (Go {@code weakRSAKey}, reason key {@code cert.weak_key}): modulus &lt; 2048 bits, or public exponent
+     * even or &lt; 3. Non-RSA keys → false.
+     */
+    public boolean weakRsaKey() {
+        PublicKey k = publicKey();
+        if (!(k instanceof RSAPublicKey)) return false;
+        RSAPublicKey r = (RSAPublicKey) k;
+        BigInteger e = r.getPublicExponent();
+        return r.getModulus().bitLength() < MIN_RSA_BITS || e.compareTo(BigInteger.valueOf(3)) < 0 || !e.testBit(0);
+    }
+
     /** Errors name certificates by serial (Go `SerialNumber.Text(16)`), never by CN — the citizen's name is PII. */
     public String serialRef() {
         return "serial " + serial.toString(16);

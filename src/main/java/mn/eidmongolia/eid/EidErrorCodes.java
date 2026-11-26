@@ -87,6 +87,14 @@ public final class EidErrorCodes {
     public static final String DOC_NOT_FOUND = "DOC_NOT_FOUND";
     public static final String PRIOR_MISMATCH = "PRIOR_MISMATCH";
 
+    // POST /seal/{orgEtsi}/registrations (CA V158; the other codes are shared with POST /pdf/signatures).
+    /** 409: no seal of this RP over the CMS's SHA-256(signedAttrs) (other organisation / certificate, or older than 7 days). */
+    public static final String SEAL_NOT_FOUND = "SEAL_NOT_FOUND";
+    /** 409: the docId / revIndex reserved when sealing ({@link SealService#sealForDocument}) differ from the registration. */
+    public static final String SEAL_DOC_MISMATCH = "SEAL_DOC_MISMATCH";
+    /** 409: the docID is reserved at a lower position by another, unregistered QR seal (until it is registered or 7 days). */
+    public static final String DOC_ID_RESERVED = "DOC_ID_RESERVED";
+
     // Token certificate issuance (409, and 400 APP_ATTESTATION_INVALID; also the session's tokenCertificate.errorCode).
     public static final String TOKEN_LIMIT_REACHED = "TOKEN_LIMIT_REACHED";
     public static final String TOKEN_IN_USE = "TOKEN_IN_USE";
@@ -173,6 +181,14 @@ public final class EidErrorCodes {
         ORG_NOT_FOUND, AUTH_SESSION_WRONG_FLOW, AUTH_SESSION_NOT_COMPLETED, AUTH_SESSION_TOO_OLD,
         AUTH_SESSION_ALREADY_USED, ORG_NOT_ACTIVE, RP_NOT_ACTIVE, SEAL_GRANT_ALREADY_APPROVED, RP_PERMISSIONS_FULL,
         SEAL_APPROVER_UNAVAILABLE, SEAL_GRANT_NOT_FOUND);
+
+    /**
+     * POST /seal/{orgEtsi}/registrations codes (Go {@code SealRegisterErrorCodes}, TS {@code SEAL_REGISTER_ERROR_CODES}, CA
+     * {@code SealRegisterErrorCodes} / discovery {@code seal.registerErrorCodes} — same order).
+     */
+    public static final List<String> SEAL_REGISTER = List.of(REQUEST_TOO_LARGE, REQUEST_INVALID, RATE_LIMITED, STATE_UNAVAILABLE,
+        CMS_INVALID, SIGNER_MISMATCH, SIGNER_CERT_INVALID, SIGNATURE_INVALID, SEAL_NOT_FOUND, SEAL_DOC_MISMATCH, TIMESTAMP_INVALID,
+        DOC_ID_RESERVED, DOC_ID_CONFLICT, PRIOR_MISMATCH, REGISTRY_CONFLICT);
 
     /** POST /pdf/signatures codes (Go {@code PDFRegisterErrorCodes}, TS {@code PDF_REGISTER_ERROR_CODES}, same order). */
     public static final List<String> PDF_REGISTER = List.of(REQUEST_INVALID, REQUEST_TOO_LARGE, CMS_INVALID,

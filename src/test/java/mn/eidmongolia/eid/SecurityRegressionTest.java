@@ -252,17 +252,32 @@ public class SecurityRegressionTest {
         KeyPair small = TestPki.rsa(1024);
         byte[] smallRoot = TestPki.cert("TEST ONLY Small Root", "TEST ONLY Small Root", small, small.getPrivate(), TestPki.SHA256_RSA, true, 4);
         byte[] underSmall = TestPki.cert("TEST ONLY Signer", "TEST ONLY Small Root", leaf, small.getPrivate(), TestPki.SHA256_RSA, false, 5);
-        expect(() -> anchoredAt(smallRoot).validateCertificateChoice(choice(underSmall), "x"), ValidationReasons.CHAIN_UNTRUSTED);
+        // rp-conformance/2: a weak RSA key in the trust pool is a configuration error (it never reaches a chain check).
+        try {
+            anchoredAt(smallRoot);
+            fail("weak trust anchor accepted");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("TrustAnchorsPEM"));
+        }
+        assertTrue(Cert.parse(underSmall).issuedBy(Cert.parse(smallRoot)));
     }
 
-    /** Every corpus and embedded RSA key is ≥ 2048 bits (the floor breaks no vector). */
+    /** rp-conformance/2's deliberately weak RSA keys (cert.weak_key, OCSP «signature»). */
+    static final java.util.Set<String> WEAK_V2 = java.util.Set.of("pki/leaf-auth-rsa-1024.pem", "pki/leaf-sign-rsa-even-exponent.pem",
+        "pki/ocsp-responder-rsa-1024.pem");
+
+    /** Every corpus and embedded RSA key is ≥ 2048 bits (the floor breaks no vector) — except the v2 weak-key vectors, which are weak. */
     @Test
     public void corpusKeysAboveFloor() {
         int n = 0;
         for (String f : ConformanceTest.json("manifest.json").optObj("files").keySet()) {
             if (!f.startsWith("pki/")) continue;
             Cert c = Cert.parse(pki(f.substring(4)));
-            if (c.isRsa()) assertTrue(f + " " + c.rsaBits(), c.rsaBits() >= ResponseValidator.MIN_RSA_BITS);
+            if (WEAK_V2.contains(f)) {
+                assertTrue(f + " is a weak-key vector", c.weakRsaKey());
+            } else if (c.isRsa()) {
+                assertTrue(f + " " + c.rsaBits(), c.rsaBits() >= ResponseValidator.MIN_RSA_BITS && !c.weakRsaKey());
+            }
             n++;
         }
         assertTrue(n >= 30);

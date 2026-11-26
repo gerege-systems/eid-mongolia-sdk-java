@@ -115,9 +115,10 @@ public final class OcspRevocationChecker implements RevocationChecker {
             emit(new OcspObservation(RevocationStatus.UNKNOWN, "", Duration.ZERO, false, e));
             throw e;
         }
-        // Cross-SDK hardening (stricter than Go / TS): the given issuer must have signed the leaf — checked before the cache
-        // and before any network call, so a wrong issuer never yields a GOOD bound to somebody else's CertID.
-        if (!leaf.issuedBy(iss)) {
+        // rp-conformance/2 (Go / TS / .NET alike): the given issuer must have issued the leaf (name, AKI/SKI, CA, signature)
+        // and must not have a weak RSA key — checked before the cache and before any network call, so a wrong issuer never
+        // yields a GOOD bound to somebody else's CertID.
+        if (iss.weakRsaKey() || !issuedBy(leaf, iss)) {
             EidException.Ocsp e = new EidException.Ocsp(EidException.Ocsp.Kind.NO_ISSUER, "", 0, "гэрчилгээг өгсөн issuer гаргаагүй", null);
             emit(new OcspObservation(RevocationStatus.UNKNOWN, "", Duration.ZERO, false, e));
             throw e;
@@ -157,6 +158,14 @@ public final class OcspRevocationChecker implements RevocationChecker {
         }
         emit(new OcspObservation(a.status, a.responder, took, false, null));
         return a.status;
+    }
+
+    /** Go {@code issuedBy}: names, AKI = SKI when both present, a CA allowed to sign certificates, signature. */
+    private static boolean issuedBy(Cert leaf, Cert issuer) {
+        byte[] aki = leaf.authorityKeyId();
+        byte[] ski = issuer.subjectKeyId();
+        if (aki.length > 0 && ski.length > 0 && !java.util.Arrays.equals(aki, ski)) return false;
+        return leaf.issuedBy(issuer);
     }
 
     private void emit(OcspObservation o) {
@@ -287,8 +296,8 @@ public final class OcspRevocationChecker implements RevocationChecker {
             }
         }
         Cert signer = rc != null ? rc : issuer;
-        if (signer.isRsa() && signer.rsaBits() < ResponseValidator.MIN_RSA_BITS) {
-            throw new EidException.Ocsp(EidException.Ocsp.Kind.SIGNATURE, responder, 0, "responder-ийн RSA түлхүүр 2048 битээс бага", null);
+        if (signer.weakRsaKey()) {
+            throw new EidException.Ocsp(EidException.Ocsp.Kind.SIGNATURE, responder, 0, "responder-ийн RSA түлхүүр сул (< 2048 бит эсвэл буруу exponent)", null);
         }
         if (resp.serial == null || !resp.serial.equals(leaf.serial)) {
             throw new EidException.Ocsp(EidException.Ocsp.Kind.INVALID, responder, 0, "хариу өөр serial-ийн тухай", null);
@@ -352,8 +361,8 @@ public final class OcspRevocationChecker implements RevocationChecker {
 
         /**
          * true (the default) also requires every SingleResponse for the serial to carry the issuer's CertID issuerNameHash /
-         * issuerKeyHash (the PAdES LTV / «My QR» binding) — stricter than the Go / TS checkers, which compare the serial
-         * only; false restores their rule.
+         * issuerKeyHash (the PAdES LTV / «My QR» binding; rp-conformance/2 requires it, Go / TS / .NET bind it too). false
+         * compares the serial only (the pre-v2 Go / TS rule) — not recommended.
          */
         public Builder bindCertId(boolean v) {
             bindCertId = v;

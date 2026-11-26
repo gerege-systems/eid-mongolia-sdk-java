@@ -381,6 +381,33 @@ public class EidException extends RuntimeException {
         }
     }
 
+    /** 409 SEAL_NOT_FOUND (POST /seal/{orgEtsi}/registrations): this RP sealed no such digest, or more than 7 days ago. */
+    public static final class SealNotFound extends Api {
+        private static final long serialVersionUID = 1L;
+
+        SealNotFound(int s, String c, String m, String b, String sv, Duration r, Map<String, List<String>> h) {
+            super(s, c, m, b, sv, r, h);
+        }
+    }
+
+    /** 409 SEAL_DOC_MISMATCH: the reserved docId / revIndex differ from the registration. */
+    public static final class SealDocMismatch extends Api {
+        private static final long serialVersionUID = 1L;
+
+        SealDocMismatch(int s, String c, String m, String b, String sv, Duration r, Map<String, List<String>> h) {
+            super(s, c, m, b, sv, r, h);
+        }
+    }
+
+    /** 409 DOC_ID_RESERVED: another, unregistered QR seal reserved the docID at a lower position. */
+    public static final class DocIdReserved extends Api {
+        private static final long serialVersionUID = 1L;
+
+        DocIdReserved(int s, String c, String m, String b, String sv, Duration r, Map<String, List<String>> h) {
+            super(s, c, m, b, sv, r, h);
+        }
+    }
+
     /**
      * Network failure or timeout: the upstream gave no response. {@link #op()} is "METHOD masked-path". Cancellation
      * by {@link Thread#interrupt()} also ends here ({@link #cancelled()}); the thread's interrupt flag stays set.

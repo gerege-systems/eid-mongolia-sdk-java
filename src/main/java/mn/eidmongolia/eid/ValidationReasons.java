@@ -2,7 +2,7 @@ package mn.eidmongolia.eid;
 
 /**
  * The stable reason keys of {@link EidException.Validation#reason()} — the keys of the cross-SDK conformance corpus
- * ({@code rp-conformance/1}, Go {@code testdata/conformance/README.md} §rp-validate). The validator performs its checks
+ * ({@code rp-conformance/2}, Go {@code testdata/conformance/README.md} §rp-validate). The validator performs its checks
  * in the order listed there and stops at the first failure. Messages stay prose (Mongolian, like the Go/TS SDKs); branch
  * on these keys, never on the message.
  */
@@ -19,6 +19,13 @@ public final class ValidationReasons {
     public static final String NO_DOCUMENT_NUMBER = "response.no_document_number";
     /** The certificate is not base64 DER X.509. */
     public static final String CERT_MALFORMED = "cert.malformed";
+    /** (rp-conformance/2) Leaf RSA key: modulus &lt; 2048 bits, or public exponent even or &lt; 3 (EC keys are not affected). */
+    public static final String CERT_WEAK_KEY = "cert.weak_key";
+    /**
+     * (rp-conformance/2) The leaf subject has more than one SERIALNUMBER or more than one CN — the identity would depend
+     * on which one a parser picks. Checked right after {@link #CERT_WEAK_KEY}.
+     */
+    public static final String SUBJECT_DUPLICATE_IDENTITY = "subject.duplicate_identity";
     public static final String CERT_NOT_YET_VALID = "cert.not_yet_valid";
     public static final String CERT_EXPIRED = "cert.expired";
     /** Auth leaf without KeyUsage digitalSignature. */
@@ -89,14 +96,8 @@ public final class ValidationReasons {
     /** Revocation: no answer and the mode is hard-fail. */
     public static final String REVOCATION_UNKNOWN = "revocation.unknown";
 
-    // ── Java-only keys (not in rp-conformance/1; the Go / TS SDKs return prose ValidationError reasons here) ──
+    // ── Java-only keys (not in rp-conformance/2; the Go / TS SDKs return prose ValidationError reasons here) ──
 
-    /**
-     * The certificate subject has more than one SERIALNUMBER or more than one CN — the identity would depend on which
-     * one a parser picks (cross-SDK hardening, rejected before any other certificate check). Same key as the .NET SDK
-     * ({@code subject.duplicate_identity}); not yet in the rp-conformance corpus.
-     */
-    public static final String SUBJECT_DUPLICATE_IDENTITY = "subject.duplicate_identity";
     /** A seal / seal-request / seal-grant response lacks a required member or does not decode. */
     public static final String SEAL_RESPONSE = "seal.response";
     /** The seal response's certificate is not an e-Seal certificate (KeyUsage = nonRepudiation only, no EKU). */

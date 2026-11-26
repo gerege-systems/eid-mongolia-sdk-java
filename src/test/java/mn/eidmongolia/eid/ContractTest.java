@@ -135,6 +135,7 @@ public class ContractTest {
         Pattern code = Pattern.compile("\\b(?:ORG_NOT_ACTIVE|SEAL_[A-Z_]+)\\b");
         Set<String> known = new HashSet<>(EidErrorCodes.SEAL);
         known.addAll(EidErrorCodes.SEAL_GRANT);
+        known.addAll(EidErrorCodes.SEAL_REGISTER);
         Map<String, Set<String>> named = new HashMap<>();
         List<String> unknown = new ArrayList<>();
         for (int i = 0; i < seal.keys.size(); i++) {
@@ -163,6 +164,41 @@ public class ContractTest {
             }
         }
         assertTrue(absent.toString(), absent.isEmpty());
+    }
+
+    /**
+     * Go TestContractSealRegistration, TS contract.test.ts: endpoints.seal.registration = "POST &lt;base&gt;/seal/{orgEtsi}/registrations
+     * — … {fields}" whose members equal {@link mn.eidmongolia.eid.pades.SealRegistration#FIELDS} (CA DisallowUnknownFields),
+     * seal.registerErrorCodes = {@link EidErrorCodes#SEAL_REGISTER} (as sets), and endpoints.seal.seal announces the optional
+     * {docId, revIndex} reservation ({@link SealService#sealForDocument}).
+     */
+    @Test
+    public void sealRegistration() {
+        String rpBase = discovery.optString("rp_api_base");
+        Json.Obj seal = discovery.optObj("endpoints").optObj("seal");
+        assertNotNull("endpoints.seal", seal);
+        String prefix = "POST " + rpBase + Routes.SEAL_REGISTRATIONS.path() + " ";
+        String desc = seal.optString("registration");
+        assertTrue("endpoints.seal.registration: " + desc, desc.startsWith(prefix));
+        String rest = desc.substring(prefix.length());
+        int i = rest.indexOf('{');
+        int j = rest.indexOf('}');
+        assertTrue("endpoints.seal.registration-д бие алга: " + desc, i >= 0 && j > i);
+        TreeSet<String> want = new TreeSet<>();
+        for (String f : rest.substring(i + 1, j).split(",")) {
+            f = f.strip();
+            if (f.endsWith("?")) f = f.substring(0, f.length() - 1);
+            want.add(f);
+        }
+        assertEquals("POST /seal/{orgEtsi}/registrations бие", want, new TreeSet<>(mn.eidmongolia.eid.pades.SealRegistration.FIELDS));
+        assertTrue("endpoints.seal.seal-д {docId, revIndex} нөөц алга: " + seal.optString("seal"), seal.optString("seal").contains("{docId, revIndex}"));
+        Json.Obj s = discovery.optObj("seal");
+        assertNotNull("discovery-д seal блок алга", s);
+        List<Object> codes = s.optArr("registerErrorCodes");
+        assertNotNull("seal.registerErrorCodes discovery-д алга", codes);
+        TreeSet<String> ca = new TreeSet<>();
+        for (Object o : codes) ca.add((String) o);
+        assertEquals("CA ↔ SDK тамганы бүртгэлийн кодын олонлог", ca, new TreeSet<>(EidErrorCodes.SEAL_REGISTER));
     }
 
     /**

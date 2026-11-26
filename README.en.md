@@ -171,7 +171,7 @@ Codes (`EidQrException.code()`): `QR_FORMAT_INVALID`, `QR_JWS_MALFORMED`, `QR_HE
 ## RP-API client (`mn.eidmongolia.eid`)
 
 The full relying-party SDK — the same scope and wire behaviour as the Go and TypeScript SDKs (cross-SDK conformance
-corpus `rp-conformance/1`: wire, validator, OCSP, ACSP, interactions; `eidlogin/1` for the sign-in button backend).
+corpus `rp-conformance/2`: wire, validator, OCSP, ACSP, interactions; `eidlogin/2` for the sign-in button backend).
 Every call is blocking (fine on virtual threads); `Thread.interrupt()` cancels a call in flight
 (`EidException.Network#cancelled`).
 
@@ -288,7 +288,8 @@ request.
 - `person()` (PKI_READ): `certificates`, `devices`, `activity(etsi, ActivityQuery)`, `summary`, `children`.
 - `seal()`: `certificate`, `requestCertificate`, `certificateRequest`, `waitForCertificate`, `requestGrant`,
   `grantStatus`, `waitForGrant`, `seal(orgEtsi, digest, hash)` — the returned ECDSA signature is verified against the
-  e-Seal certificate; `isSealCertificate`.
+  e-Seal certificate; `sealForDocument(orgEtsi, digest, docId, revIndex)` (the QR seal's reservation),
+  `registerSealedPdf(orgEtsi, registration)` (see «Sealing a PDF»); `isSealCertificate`.
 - `token()`: `issueCertificate`, `previewCertificate`, `certificateResult`, `certificateInfo`, `authChallenge`,
   `authVerify` (r‖s signature and certificate checked by the validator's chain before anything is sent), static
   `verifyTokenCertificates`, `tokenAuthDigest`, `tokenLimitOf`.
@@ -329,11 +330,29 @@ only, no EKU) draws the seal stamp too.
 - `docId` on a signed document (APPEARANCE_SPEC §6.6, golden v13): the verify page, else the `/EIDVerify` marker of an
   organisation seal stamp with QR, else `PrepareOptions.docId`; a found docId that differs from it is `REQUEST_INVALID`
   (also for an invisible signature). No random docId on a signed document (as before). Like Go, this SDK does not emit
-  the seal stamp with QR (§6.5) yet — not until the CA / TS validators accept it (it is golden-tested only).
+  the seal stamp with QR (§6.5) unless asked (`SealOptions.qr`, below).
+
+**Seal stamp with QR and seal registration (CA V158, Go / TS alike):**
+
+```java
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder()
+    .qr(true)                       // the stamp carries a QR to /verify/<docId>/<revIndex>; the position is reserved
+    .fileName("Invoice.pdf")        // optional, shown on /verify (≤ 120 characters)
+    .build());
+PdfSignatureRegistered reg = eid.seal().registerSealedPdf("NTRMN-1234567", sealed.sealRegistration()); // within 7 days
+```
+
+`qr(true)` needs a `DocumentSealer` (`eid.seal()` is one; a plain `Sealer` → `REQUEST_INVALID`), cannot be combined
+with `invisible(true)`, and reserves `(docId, revIndex)` via `sealForDocument` only when the QR stamp is actually drawn.
+A signed document without a verify page / QR seal stamp needs `SealOptions.docId`. `Completed.sealRegistration()` builds
+the `POST /seal/{orgEtsi}/registrations` body (also for a QR-less seal); `registerSealedPdf` checks it before sending
+(`IllegalArgumentException`), answers `created()` true on 201 and false on an idempotent 200, retries the
+`PRIOR_MISMATCH` splits like `pdf().registerSignature`, and maps the CA codes (`EidErrorCodes.SEAL_REGISTER`, typed
+`SealNotFound`, `SealDocMismatch`, `DocIdReserved`). Without `qr` the output is byte-identical to before.
 
 ### «Sign in with eID» button backend (`mn.eidmongolia.eid.login`)
 
-The backend of the browser `<eid-login-button>` (TS SDK) — the same JSON, cookie and status codes as Go `eidlogin` / TS `createEidLogin` (all 24 scenarios of the `eidlogin/1` conformance corpus). `EidLogin.handle(EidLoginRequest)` is framework neutral; `EidLoginHttpHandler` for the JDK server, the snippets below for Servlet / Spring. A push never reveals whether a number is registered (decoy, 1 s floor); the cookie is HttpOnly + Secure + SameSite=Lax; the state stays on the server (`EidLoginStore`, memory by default); OCSP revocation on by default (soft-fail — see above).
+The backend of the browser `<eid-login-button>` (TS SDK) — the same JSON, cookie and status codes as Go `eidlogin` / TS `createEidLogin` (all 34 scenarios of the `eidlogin/2` conformance corpus). `EidLogin.handle(EidLoginRequest)` is framework neutral; `EidLoginHttpHandler` for the JDK server, the snippets below for Servlet / Spring. A push never reveals whether a number is registered (decoy, 1 s floor); the cookie is HttpOnly + Secure + SameSite=Lax; the state stays on the server (`EidLoginStore`, memory by default); OCSP revocation on by default (soft-fail — see above).
 
 ```java
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: TrustConfig with the national root)
@@ -406,9 +425,16 @@ EidLogin login = EidLogin.builder(eid)
 > derived (a shorter proxy chain than configured) counts in one shared `start:unknown` bucket; IPv6 clients are keyed
 > by their /64. With no IP source at all the per-IP limit is off and a one-time warning is logged.
 
-The per-ID push limit (3 per minute per number) is keyed by the number alone: anyone who knows a citizen's ID number can
-use up its window and delay that citizen's **push** sign-in for up to a minute — inherent to push-by-ID; QR and Web2App
-are unaffected.
+The per-ID push limit (3 per minute per number) is keyed by `push:<pushKey>` — the audit HMAC of the number
+(`auditKey`; set the same key on every instance that shares a limiter), never the number itself, so a custom
+`rateLimit` hook or a Redis limiter stores no ID numbers (0.2.0 passed `push:<id>`). Anyone who knows a citizen's ID
+number can still use up its window and delay that citizen's **push** sign-in for up to a minute — inherent to
+push-by-ID; QR and Web2App are unaffected.
+
+The login cookie is named `__Host-eid_login` by default (Secure, no Domain, Path `/` — browsers then refuse the name from
+a sibling host or another path); with `insecureCookie`, a `cookieDomain` or another `cookiePath` the default stays
+`eid_login`, and `cookieName(...)` is used as given. A request carrying the login cookie more than once is treated as
+having none (status `EXPIRED`, callback `eid_error=expired`). Upgrading from 0.2.0 restarts logins in progress once.
 
 ### Support matrix (vs the Go / TypeScript SDKs)
 
@@ -425,9 +451,9 @@ are unaffected.
 | Sign-in button backend (JDK adapter; Servlet / Spring snippets) | ✓ |
 | PAdES prepare / complete / suggestPlacement / registration body | ✓ |
 | `sealPdf` (visible seal stamp — default, invisible) | ✓ (golden v12) |
-| Seal stamp with QR, docId rule for signed documents | ✓ golden v13 (the QR seal stamp is not public, as in Go) |
+| Seal stamp with QR (`SealOptions.qr`), docId rule for signed documents | ✓ golden v13 |
 | ValidatePDF (verify a signed PDF) | not yet |
-| Seal registration (`POST /v3/seal/{org}/registrations`) | not yet (in no SDK yet) |
+| Seal registration (`POST /seal/{orgEtsi}/registrations`, `sealForDocument`) | ✓ |
 
 ### Migrating from 0.1.x
 
