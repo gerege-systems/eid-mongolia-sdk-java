@@ -14,7 +14,7 @@
 
 - Java 17+, **runtime хамааралгүй** — `java.security` + жижиг DER writer (BouncyCastle, Jackson, Kotlin үгүй).
 - Thread-safe, глобал төлөвгүй. Сүлжээ зөвхөн `complete`-д (TSA, OCSP/CRL) ба `EidQr.verify`-ийн анхдагч OCSP-д.
-- **RP-API клиент энд байхгүй.** Иргэний сесс эхлүүлэх, `RAW_DIGEST_SIGNATURE` гарын үсэг авах, `POST /pdf/signatures`,
+- **RP-API клиент хараахан бүрэн биш** (`mn.eidmongolia.eid` — хийгдэж байна, доор). Иргэний сесс эхлүүлэх, `RAW_DIGEST_SIGNATURE` гарын үсэг авах, `POST /pdf/signatures`,
   `POST /authentication/qr` зэргийг RP-API-г шууд HTTPS/JSON-оор дуудна —
   [RP-API баримт](https://developer.eidmongolia.mn/#overview). Энэ сан зөвхөн PDF бэлдэх/суулгах, бүртгэлийн биеийг
   угсрах, «Миний QR»-ийг задлах/шалгах ажлыг хийнэ.
@@ -167,6 +167,33 @@ revocationSoftFail)` — null бол шигтгэсэн үндэсний root + 
 `QR_CERT_REVOKED`, `QR_REVOCATION_UNKNOWN`, `QR_SIGNATURE_INVALID`, `QR_CLAIMS_INVALID`, `QR_AUDIENCE_MISMATCH`,
 `QR_SESSION_MISMATCH`, `QR_NONCE_MISMATCH`, `QR_NOT_YET_VALID`, `QR_EXPIRED`, `QR_DATA_INVALID`. RP-API-ийн HTTP алдаа
 (`QR_TOKEN_INVALID`, `QR_PRESENTATION_GONE` …) таны HTTP клиентэд ирнэ.
+
+## RP-API клиент (`mn.eidmongolia.eid`) — хийгдэж байна
+
+> **Хийгдэж байна (in progress).** Go / TS SDK-тэй ижил хүрээтэй RP-API клиентийг энэ artifact-д (координат өөрчлөгдөхгүй)
+> үе шаттай нэмж байна. Одоо байгаа: тохиргоо, transport, алдаа, замын хүснэгт, wire төрлүүд, discovery-ийн `sessionTtl`,
+> крипто туслахууд. Auth / Sign / Session / Validator дараагийн хувилбаруудад — тэр хүртэл RP-API-г шууд HTTPS/JSON-оор дуудна.
+
+```java
+EidClient eid = EidClient.builder(new Credentials(rpUuid, "Интернэт банк", apiSecret))
+    .transport(JdkHttpTransport.create(sslContext))   // mTLS бол; анхдагч JdkHttpTransport.create()
+    .language("mn")                                   // Accept-Language
+    .build();                                         // baseUrl анхдагч https://rp.eidmongolia.mn
+SessionTtl ttl = eid.auth().sessionTtl();             // discovery: auth / sign session-ий амьдрах хугацаа
+
+String link = DeviceLink.build(session.linkInput(DeviceLinkType.QR, "mon").build());  // authCode = HMAC-SHA256
+String interactions = EidCrypto.interactionsToBase64(List.of(Interaction.displayTextAndPin("Нэвтрэх")));
+byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                          // ACSP_V2
+```
+
+- `baseUrl`: зөвхөн https (http нь зөвхөн localhost / loopback), хуучин `ca.eidmongolia.mn` хост тодорхой алдаа; Bearer
+  API secret; дуудлага бүрд нийт deadline (анхдагч 15 с, PDF 80 с); JSON хариу ≤ 4 MiB; redirect дагахгүй.
+- Блоклох дуудлага (virtual thread-д тохиромжтой); `Thread.interrupt()` дуудлагыг цуцална (`EidException.Network#cancelled`).
+- Алдаа: `EidException` (unchecked) — `Authentication` (401), `Forbidden` (403), `Api` ба код тус бүрийн дэд анги
+  (`NoSigningCertificate`, `SealServiceDisabled` …), `Network`, `ResponseTooLarge`, `SessionFailed`, `Validation`,
+  `DeviceLink`; бүгдэд `code()`, `status()`, `retryAfter()`, `retryable()`. Мессеж/`op`-д иргэний дугаар орохгүй.
+- Шалгалт: CA-ийн `devicelink_golden.json` (засваргүй хуулбар, SHA-256 бэхэлсэн), Smart-ID ACSP_V2 вектор, interactions-ийн
+  `JSON.stringify` байт-ижил тохиолдлууд; `contract.yml` замын хүснэгтийг live `/.well-known/eid`-тэй өдөр бүр тулгана.
 
 ## Хөгжүүлэлт
 
