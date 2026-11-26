@@ -13,7 +13,11 @@ final class Routes {
 
     /** A route: method + path template with {param} placeholders. */
     record Route(String method, String path) {
-        /** The template with each {param} replaced, in order, by the path-escaped argument (Go {@code url.PathEscape}). */
+        /**
+         * The template with each {param} replaced, in order, by the path-escaped argument (Go {@code url.PathEscape}).
+         *
+         * @throws IllegalArgumentException wrong argument count, or an argument that is null, empty, "." or ".."
+         */
         String expand(String... args) {
             StringBuilder b = new StringBuilder();
             String rest = path;
@@ -21,6 +25,10 @@ final class Routes {
                 int i = rest.indexOf('{');
                 int j = rest.indexOf('}');
                 if (i < 0 || j < i) throw new IllegalArgumentException("eid: route " + path + ": параметр илүү");
+                // "", "." and ".." would change the path (/session/ → /session, /x/.. → /) — never sent.
+                if (a == null || a.isEmpty() || a.equals(".") || a.equals("..")) {
+                    throw new IllegalArgumentException("eid: route " + path + ": параметр хоосон, \".\" эсвэл \"..\" байж болохгүй");
+                }
                 b.append(rest, 0, i).append(pathEscape(a));
                 rest = rest.substring(j + 1);
             }

@@ -48,6 +48,17 @@ public record EidLoginRequest(String method, String url, Map<String, List<String
         return body;
     }
 
+    /**
+     * Redacted: the path without its query (the callback's userChallengeVerifier), header NAMES only (no Cookie /
+     * Authorization values) and the body's length — safe for logs.
+     */
+    @Override
+    public String toString() {
+        int q = url.indexOf('?');
+        return "EidLoginRequest[method=" + method + ", url=" + (q < 0 ? url : url.substring(0, q) + "?…") + ", headers=" + headers.keySet()
+            + ", body=" + body.length + " bytes, ip=" + ip + "]";
+    }
+
     /** The first value of a header (case-insensitive), else "". */
     public String header(String name) {
         List<String> v = headers.get(name);

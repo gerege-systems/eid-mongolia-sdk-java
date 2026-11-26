@@ -87,6 +87,8 @@ public class EidLoginSecurityTest {
         volatile String session = "{\"state\":\"RUNNING\"}";
         volatile int sessionStatus = 200;
         volatile String discovery = "{\"version\":\"v3\"}";
+        /** When set, a /session/ call waits on it (a long-poll in progress). */
+        volatile java.util.concurrent.CountDownLatch sessionGate;
         final List<String> calls = Collections.synchronizedList(new ArrayList<>());
 
         static EidHttpResponse json(int s, String body) {
@@ -116,7 +118,17 @@ public class EidLoginSecurityTest {
                         return json(200, "{\"sessionID\":\"" + SID + "\",\"vc\":{\"type\":\"alphaNumeric4\",\"value\":\"54321\"}}");
                 }
             }
-            if (p.startsWith("/session/")) return json(sessionStatus, session);
+            if (p.startsWith("/session/")) {
+                java.util.concurrent.CountDownLatch g = sessionGate;
+                if (g != null) {
+                    try {
+                        g.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return json(sessionStatus, session);
+            }
             return json(404, "{\"error\":\"not found\"}");
         }
     }
@@ -489,7 +501,7 @@ public class EidLoginSecurityTest {
         assertFalse(lim.test("push:victim"));
         assertTrue(lim.test("a"));
         assertTrue(lim.test("b"));
-        assertFalse("full — a new key is refused", lim.test("c"));
+        assertTrue("full — a new key is counted in the overflow bucket (review S4; Go refuses it)", lim.test("c"));
         assertFalse("the victim's counter survives", lim.test("push:victim"));
         clock.advance(Duration.ofMillis(60));
         assertTrue("passed windows are dropped", lim.test("c"));
@@ -591,5 +603,202 @@ public class EidLoginSecurityTest {
         g.fake.sessionStatus = 404;
         assertEquals("EXPIRED", body(g.get("/auth/eid/status", gc)).get("state"));
         assertEquals(EidLoginEvent.Kind.EXPIRED, g.events.get(0).kind());
+    }
+
+    // Review S1 / S5: N concurrent status calls for one completed session → onSuccess exactly once; a status call while
+    // another one for the same session is waiting on eID answers PENDING at once (per-session single flight).
+    @Test
+    public void concurrentStatusSucceedsOnceAndSingleFlight() throws Exception {
+        Env e = vectorEnv("auth-pss-sha512-qr", null);
+        String saved = e.fake.session;
+        e.fake.session = "{\"state\":\"RUNNING\"}";
+        String cookie = loginCookie(e.post("/auth/eid/start", "{\"mode\":\"qr\"}", null));
+        e.fake.session = saved;
+        int n = 16;
+        java.util.concurrent.CountDownLatch gate = new java.util.concurrent.CountDownLatch(1);
+        e.fake.sessionGate = gate;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(n);
+        try {
+            java.util.concurrent.CyclicBarrier go = new java.util.concurrent.CyclicBarrier(n);
+            List<java.util.concurrent.Future<String>> fs = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                fs.add(pool.submit(() -> {
+                    go.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    return (String) body(e.get("/auth/eid/status", cookie)).get("state");
+                }));
+            }
+            // Every caller but the one waiting on eID returns PENDING without waiting.
+            long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+            while (fs.stream().filter(java.util.concurrent.Future::isDone).count() < n - 1 && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals("all but one answered while eID was still being polled", n - 1, fs.stream().filter(java.util.concurrent.Future::isDone).count());
+            gate.countDown();
+            List<String> states = new ArrayList<>();
+            for (java.util.concurrent.Future<String> f : fs) states.add(f.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(states.toString(), 1, states.stream().filter("OK"::equals).count());
+            assertEquals(states.toString(), n - 1, states.stream().filter("PENDING"::equals).count());
+        } finally {
+            gate.countDown();
+            pool.shutdownNow();
+        }
+        e.fake.sessionGate = null;
+        assertEquals("onSuccess ran exactly once", 1, e.ids.size());
+
+        // No gate: a burst of concurrent calls still completes the sign-in exactly once (store.delete decides).
+        Env b = vectorEnv("auth-pss-sha512-qr", null);
+        b.fake.session = "{\"state\":\"RUNNING\"}";
+        String c2 = loginCookie(b.post("/auth/eid/start", "{\"mode\":\"qr\"}", null));
+        b.fake.session = saved;
+        java.util.concurrent.ExecutorService pool2 = java.util.concurrent.Executors.newFixedThreadPool(n);
+        try {
+            java.util.concurrent.CyclicBarrier go = new java.util.concurrent.CyclicBarrier(n);
+            List<java.util.concurrent.Future<String>> fs = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                fs.add(pool2.submit(() -> {
+                    go.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    return (String) body(b.get("/auth/eid/status", c2)).get("state");
+                }));
+            }
+            List<String> states = new ArrayList<>();
+            for (java.util.concurrent.Future<String> f : fs) states.add(f.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(states.toString(), 1, states.stream().filter("OK"::equals).count());
+        } finally {
+            pool2.shutdownNow();
+        }
+        assertEquals(1, b.ids.size());
+    }
+
+    // Review S5: the Web2App callback with the matching session id but an empty or missing userChallengeVerifier is
+    // refused by EidLogin (unbound) AND by the validator (AUTH_VERIFIER_REQUIRED) — both layers pinned.
+    @Test
+    public void web2AppCallbackWithoutVerifierRefused() {
+        for (String q : new String[] {"&userChallengeVerifier=", ""}) {
+            Env e = vectorEnv("auth-web2app-verifier", null);
+            String saved = e.fake.session;
+            e.fake.session = "{\"state\":\"RUNNING\"}";
+            String cookie = loginCookie(e.get("/auth/eid/start?mode=web2app", null));
+            e.fake.session = saved;
+            EidLoginResponse cb = e.get("/auth/eid/callback?sessionId=" + SID + q, cookie);
+            assertEquals(303, cb.status());
+            assertEquals("/login?eid_error=unbound", cb.header("Location"));
+            assertTrue(e.ids.isEmpty());
+            assertEquals("unbound", e.events.get(e.events.size() - 1).meta().get("reason"));
+        }
+        Map<String, Object> c = rpCase("auth-web2app-verifier");
+        @SuppressWarnings("unchecked")
+        EidClient client = TestAccess.clock(EidClient.builder(new Credentials(RP_UUID, "Тест банк", "rp_sk_test"))
+            .baseUrl("https://rp-api.conformance.test").transport(new Fake()).trust(trust((Map<String, Object>) c.get("$trust"))),
+            new FakeClock(NOW)).build();
+        mn.eidmongolia.eid.SessionResult res = mn.eidmongolia.eid.SessionService.parseSessionResult(LoginJson.stringify(c.get("session")));
+        AcspContext a = acsp(EidLoginConformanceTest.obj(c.get("acsp")));
+        for (String v : new String[] {null, ""}) {
+            try {
+                client.validator().validateAuth(res, a, mn.eidmongolia.eid.ValidateAuthOptions.builder().expectedFlowType(FlowType.WEB2APP)
+                    .userChallengeVerifier(v).build());
+                fail("verifier " + v);
+            } catch (mn.eidmongolia.eid.EidException.Validation x) {
+                assertEquals(mn.eidmongolia.eid.ValidationReasons.AUTH_VERIFIER_REQUIRED, x.reason());
+            }
+        }
+    }
+
+    // Review S3 / S4: no IP from anywhere → no limit (warned once; the corpus pins it); a builder clientIp that answers ""
+    // → the shared start:unknown bucket; IPv6 keyed by /64; a full limiter table → the overflow bucket, counters kept.
+    @Test
+    public void clientIpBucketsAndLimiterOverflow() {
+        List<String> keys = new ArrayList<>();
+        List<String> warnings = Collections.synchronizedList(new ArrayList<>());
+        System.Logger logger = new System.Logger() {
+            @Override
+            public String getName() {
+                return "test";
+            }
+
+            @Override
+            public boolean isLoggable(Level level) {
+                return true;
+            }
+
+            @Override
+            public void log(Level level, java.util.ResourceBundle bundle, String msg, Throwable thrown) {
+                if (level == Level.WARNING) warnings.add(msg);
+            }
+
+            @Override
+            public void log(Level level, java.util.ResourceBundle bundle, String format, Object... params) {
+                if (level == Level.WARNING) warnings.add(format);
+            }
+        };
+        Env none = new Env(b -> b.logger(logger).rateLimit(k -> {
+            keys.add(k);
+            return true;
+        }), null);
+        for (int i = 0; i < 3; i++) assertEquals(200, none.post("/auth/eid/start", "{\"mode\":\"qr\"}", null).status());
+        assertTrue("no start key without any IP: " + keys, keys.isEmpty());
+        assertEquals("warned once: " + warnings, 1, warnings.stream().filter(w -> w.contains("client IP")).count());
+
+        String[] ip = {""};
+        Env e = new Env(b -> b.clientIp(r -> ip[0]).rateLimit(k -> {
+            keys.add(k);
+            return true;
+        }), null);
+        assertEquals(200, e.post("/auth/eid/start", "{\"mode\":\"qr\"}", null).status());
+        ip[0] = "2001:db8:1:2:aaaa:bbbb:cccc:dddd";
+        assertEquals(200, e.post("/auth/eid/start", "{\"mode\":\"qr\"}", null).status());
+        ip[0] = "::ffff:192.0.2.9";
+        assertEquals(200, e.post("/auth/eid/start", "{\"mode\":\"qr\"}", null).status());
+        assertEquals(List.of("start:unknown", "start:2001:db8:1:2::/64", "start:192.0.2.9"), keys);
+        assertEquals("2001:db8:1:2::/64", EidLogin.ipKey("[2001:db8:1:2::1%eth0]"));
+        assertEquals("not an IP literal: unchanged, never resolved", "host:name", EidLogin.ipKey("host:name"));
+        // The unknown bucket is limited like any IP: 20 per minute shared by every client without an address.
+        Env u = new Env(b -> b.clientIp(r -> ""), null);
+        for (int i = 0; i < 20; i++) assertEquals(200, u.post("/auth/eid/start", "{\"mode\":\"qr\"}", null).status());
+        assertEquals(429, u.post("/auth/eid/start", "{\"mode\":\"qr\"}", null).status());
+
+        FakeClock clock = new FakeClock(NOW);
+        Predicate<String> lim = EidLogin.windowLimiter(1, Duration.ofMillis(50), 3, clock);
+        assertTrue(lim.test("push:victim"));
+        assertTrue(lim.test("a"));
+        assertTrue(lim.test("b"));
+        assertTrue("full — a new key goes to the overflow bucket", lim.test("c"));
+        assertFalse("the overflow bucket is limited too", lim.test("d"));
+        assertFalse("the victim's counter survives", lim.test("push:victim"));
+        clock.advance(Duration.ofMillis(60));
+        assertTrue("passed windows are dropped", lim.test("e"));
+    }
+
+    // Review: toString of a request never prints the Cookie value, the body or the callback's query.
+    @Test
+    public void requestToStringRedacted() {
+        EidLoginRequest r = EidLoginRequest.of("GET", "/auth/eid/callback?sessionId=" + SID + "&userChallengeVerifier=secret-verifier",
+            Map.of("Cookie", List.of("eid_login=" + SID + ".binding-secret")), "{\"idCode\":\"УБ12345678\"}", "192.0.2.1");
+        String s = r.toString();
+        assertFalse(s, s.contains("binding-secret") || s.contains("secret-verifier") || s.contains("УБ12345678") || s.contains(SID));
+        assertTrue(s, s.contains("/auth/eid/callback") && s.contains("Cookie"));
+    }
+
+    // Review: a store failure on the callback redirects (303 eid_error=internal, Go) instead of a JSON 500.
+    @Test
+    public void callbackStoreErrorRedirects() {
+        Env e = new Env(b -> b.store(new EidLoginStore() {
+            @Override
+            public EidLoginTx get(String id) {
+                throw new IllegalStateException("redis down");
+            }
+
+            @Override
+            public void set(EidLoginTx tx, Duration ttl) {
+            }
+
+            @Override
+            public boolean delete(String id) {
+                return false;
+            }
+        }), null);
+        EidLoginResponse cb = e.get("/auth/eid/callback?sessionId=" + SID + "&userChallengeVerifier=x", "eid_login=" + SID + "." + "A".repeat(43));
+        assertEquals(303, cb.status());
+        assertEquals("/login?eid_error=internal", cb.header("Location"));
+        assertEquals(500, e.get("/auth/eid/status", "eid_login=" + SID + "." + "A".repeat(43)).status());
     }
 }

@@ -62,7 +62,13 @@ import mn.eidmongolia.eid.VerifiedIdentity;
  * The eID server normalises the Web2App callback path to {@code /auth/eid/callback}, so {base} = {@code /auth/eid}.
  * Mount {@link #handle} there with an adapter ({@link EidLoginHttpHandler} for the JDK server, README for Servlet /
  * Spring). The state (session token / secret, rpChallenge, ACSP) stays on the server ({@link EidLoginStore}); the
- * browser holds only the HttpOnly cookie {@code <sessionId>.<binding>} — status / callback answer only the browser that
+ * browser holds only the HttpOnly cookie {@code <sessionId>.<binding>} —     * Routes by the last path segment (start | status | callback); anything else 404 {"error":"not_found"}. Store /
+     * onSuccess failures never leak internals: 500 {"error":"internal"} on start / status, 303 to the failure redirect
+     * with {@code eid_error=internal} on the callback (an RP-API 401 / 403 → 502 eid_unavailable).
+     *
+     * <p>Blocking: a status call holds its thread for up to {@link Builder#poll} (one at a time per session — a
+     * concurrent one answers PENDING at once), a push start for at least the push floor. Run it on virtual threads (Java
+     * 21+) or a bounded pool sized for your concurrent sign-ins; never on a single dispatcher thread./ callback answer only the browser that
  * started the sign-in (login CSRF, relay). The citizen reaches {@link Builder#onSuccess} only after the response
  * validator (chain + ACSP_V2 + flowType + the Web2App userChallengeVerifier) and the revocation check.
  *
@@ -84,6 +90,8 @@ public final class EidLogin {
     static final int LIMITER_MAX_KEYS = 10_000;
     private static final Duration AUTH_TTL_REFRESH = Duration.ofMinutes(10);
     private static final Duration AUTH_TTL_RETRY = Duration.ofMinutes(1);
+    /** The discovery fetch deadline for the push lifetime (Go authTTL: 2 s). */
+    static final Duration AUTH_TTL_FETCH_TIMEOUT = Duration.ofSeconds(2);
 
     private static final Pattern ID_RE = Pattern.compile("^(\\p{L}{2}[0-9]{8}|[0-9]{8,14}|PNOMN-[0-9]{8,14})$");
     private static final Pattern UUID_RE = Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
@@ -125,6 +133,10 @@ public final class EidLogin {
     private final Object ttlLock = new Object();
     private Duration caTtl = Duration.ZERO;
     private Instant caTtlNext = Instant.MIN;
+    private boolean ttlRefreshing;
+    /** Session ids with a status call in progress (per-session single flight). */
+    private final java.util.Set<String> polling = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.atomic.AtomicBoolean warnedNoIp = new java.util.concurrent.atomic.AtomicBoolean();
 
     /** onSuccess: create YOUR session here (a NEW one — session fixation) and return its Set-Cookie in the headers. */
     @FunctionalInterface
@@ -263,18 +275,25 @@ public final class EidLogin {
         return out;
     }
 
+    /** The shared bucket new keys fall into while the limiter table is full (never a valid kind:value key). */
+    static final String OVERFLOW_KEY = "\0overflow";
+
     /**
-     * A memory sliding window per key, at most maxKeys keys: when full it drops keys whose window passed and, if still
-     * full, REFUSES new keys (fail closed) — existing counters are never cleared (Go {@code windowLimiter}).
+     * A memory sliding window per key, at most maxKeys keys. When full it drops keys whose window passed; if still full,
+     * a NEW key is counted in one shared overflow bucket (same limit and window) instead of every new key being refused —
+     * existing counters are never cleared or evicted, so flooding the table cannot reset a victim's push counter (Go
+     * {@code windowLimiter} refuses every new key here).
      */
     static Predicate<String> windowLimiter(int limit, Duration window, int maxKeys, Clock clock) {
         Map<String, List<Instant>> hits = new LinkedHashMap<>();
-        return key -> {
+        return k -> {
             synchronized (hits) {
+                String key = k;
                 Instant now = clock.instant();
                 if (!hits.containsKey(key) && hits.size() >= maxKeys) {
                     hits.values().removeIf(ts -> ts.isEmpty() || Duration.between(ts.get(ts.size() - 1), now).compareTo(window) >= 0);
-                    if (hits.size() >= maxKeys) return false;
+                    // The overflow bucket itself may be one entry beyond maxKeys.
+                    if (hits.size() >= maxKeys) key = OVERFLOW_KEY;
                 }
                 List<Instant> h = new ArrayList<>();
                 for (Instant t : hits.getOrDefault(key, List.of())) if (Duration.between(t, now).compareTo(window) < 0) h.add(t);
@@ -321,6 +340,54 @@ public final class EidLogin {
             if (!xff.isEmpty()) return hops > xff.size() ? "" : xff.get(xff.size() - hops);
             return r.header("X-Real-IP").trim();
         };
+    }
+
+    /** The {@code start:<value>} key of a client whose IP could not be derived (one shared, fail-closed bucket). */
+    static final String UNKNOWN_IP = "unknown";
+
+    /**
+     * The value of the {@code start:<value>} limit key. {@link Builder#clientIp} set: its answer, and an EMPTY answer (a
+     * proxy chain shorter than configured, no socket address) is the shared {@value #UNKNOWN_IP} bucket — never "no
+     * limit". Not set: the adapter's {@link EidLoginRequest#ip()}; when the adapter gave none either, null = no per-IP
+     * limit (warned once). IPv6 clients are keyed by their /64 prefix (one subscriber usually holds a whole /64).
+     */
+    private String startKey(EidLoginRequest req) {
+        String ip;
+        if (clientIp != null) {
+            ip = clientIp.apply(req);
+            if (ip == null || ip.isBlank()) return UNKNOWN_IP;
+        } else {
+            ip = req.ip();
+            if (ip == null || ip.isEmpty()) {
+                if (warnedNoIp.compareAndSet(false, true)) {
+                    log.log(System.Logger.Level.WARNING, "eidlogin: client IP алга (Builder.clientIp ч, adapter-ийн ip ч үгүй) — start:<ip> "
+                        + "хязгаар ажиллахгүй; EidLoginHttpHandler.ClientIp.direct() / trustedProxies(n) эсвэл clientIp(...) өг");
+                }
+                return null;
+            }
+        }
+        return ipKey(ip.trim());
+    }
+
+    /** An IPv6 literal → its /64 prefix ({@code 2001:db8:1:2::/64}); anything else unchanged. Never a DNS lookup. */
+    static String ipKey(String ip) {
+        if (ip.indexOf(':') < 0) return ip;
+        String lit = ip;
+        if (lit.startsWith("[") && lit.endsWith("]")) lit = lit.substring(1, lit.length() - 1);
+        int zone = lit.indexOf('%');
+        if (zone >= 0) lit = lit.substring(0, zone);
+        if (lit.isEmpty() || !lit.chars().allMatch(c -> c == ':' || c == '.' || Character.digit(c, 16) >= 0)) return ip;
+        byte[] a;
+        try {
+            // In brackets the JDK parses an IPv6 literal only and never asks the resolver; IPv4-mapped comes back as IPv4.
+            a = java.net.InetAddress.getByName("[" + lit + "]").getAddress();
+        } catch (java.net.UnknownHostException | SecurityException e) {
+            return ip;
+        }
+        if (a.length == 4) return (a[0] & 0xff) + "." + (a[1] & 0xff) + "." + (a[2] & 0xff) + "." + (a[3] & 0xff);
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < 8; i += 2) b.append(Integer.toHexString(((a[i] & 0xff) << 8) | (a[i + 1] & 0xff))).append(':');
+        return b.append(":/64").toString();
     }
 
     // ── HTTP helpers ──
@@ -559,8 +626,8 @@ public final class EidLogin {
         String idCode = normaliseId(b.idCode);
         if (mode.equals(MODE_PUSH) && !ID_RE.matcher(idCode).matches()) return error(400, "invalid_id");
 
-        String ip = clientIp != null ? clientIp.apply(req) : req.ip();
-        if (ip != null && !ip.isEmpty() && !allow("start", ip)) return limited(mode, idCode);
+        String ip = startKey(req);
+        if (ip != null && !allow("start", ip)) return limited(mode, idCode);
         if (mode.equals(MODE_PUSH) && !allow("push", idCode)) return limited(mode, idCode);
 
         String lang = "en".equals(b.lang) ? "eng" : "mon";
@@ -681,24 +748,33 @@ public final class EidLogin {
         }
     }
 
-    /** The CA's authentication session lifetime (discovery sessionTtl.auth, cached; Go {@code authTTL}). */
+    /**
+     * The CA's authentication session lifetime (discovery sessionTtl.auth, cached; Go {@code authTTL}). The fetch is
+     * bounded to {@link #AUTH_TTL_FETCH_TIMEOUT} (Go: 2 s) and runs OUTSIDE {@code ttlLock}: one caller refreshes, the
+     * others answer with the cached value meanwhile (single flight) — a slow discovery never queues every push behind it.
+     */
     private Duration authTtl() {
+        Instant now = clock.instant();
         synchronized (ttlLock) {
-            Instant now = clock.instant();
-            if (now.isAfter(caTtlNext)) {
-                caTtlNext = now.plus(AUTH_TTL_RETRY);
-                try {
-                    Duration a = client.auth().sessionTtl().auth();
-                    if (a.compareTo(Duration.ZERO) > 0) {
-                        caTtl = a;
-                        caTtlNext = now.plus(AUTH_TTL_REFRESH);
-                    } else {
-                        caTtlNext = now.plus(AUTH_TTL_REFRESH); // an older CA — observeAuthTtl
-                    }
-                } catch (EidException e) {
-                    log.log(System.Logger.Level.WARNING, "eidlogin: discovery sessionTtl: " + e.getClass().getSimpleName());
+            if (!now.isAfter(caTtlNext) || ttlRefreshing) return caTtl;
+            ttlRefreshing = true;
+            caTtlNext = now.plus(AUTH_TTL_RETRY);
+        }
+        Duration fetched = null;
+        try {
+            fetched = client.auth().sessionTtl(AUTH_TTL_FETCH_TIMEOUT).auth();
+        } catch (EidException e) {
+            log.log(System.Logger.Level.WARNING, "eidlogin: discovery sessionTtl: " + e.getClass().getSimpleName());
+        } finally {
+            synchronized (ttlLock) {
+                ttlRefreshing = false;
+                if (fetched != null) {
+                    if (fetched.compareTo(Duration.ZERO) > 0) caTtl = fetched;
+                    caTtlNext = now.plus(AUTH_TTL_REFRESH); // ZERO: an older CA — observeAuthTtl
                 }
             }
+        }
+        synchronized (ttlLock) {
             return caTtl;
         }
     }
@@ -871,6 +947,30 @@ public final class EidLogin {
         if (!req.lowerMethod().equals("GET")) return error(405, "method_not_allowed");
         EidLoginTx tx = loadTx(req);
         if (tx == null) return expired();
+        // Per-session single flight: one status call waits on eID at a time; a concurrent one for the same session answers
+        // PENDING at once instead of pinning another thread for the poll (the browser polls again).
+        if (!polling.add(tx.sessionId())) return pending(tx);
+        try {
+            return statusOnce(req, tx);
+        } finally {
+            polling.remove(tx.sessionId());
+        }
+    }
+
+    /** The PENDING answer (+ a fresh QR). */
+    private EidLoginResponse pending(EidLoginTx tx) {
+        long ms = Duration.between(clock.instant(), tx.expiresAt()).toMillis();
+        int left = (int) Math.floor(ms / 1000.0 + 0.999);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("state", "PENDING");
+        out.put("vc", tx.vc());
+        out.put("expiresIn", Math.max(0, left));
+        String q = qrLink(tx);
+        if (!q.isEmpty()) out.put("qr", q);
+        return new Out().json(200, out);
+    }
+
+    private EidLoginResponse statusOnce(EidLoginRequest req, EidLoginTx tx) {
         SessionResult res;
         if (tx.decoy()) {
             // Never ask eID (a 404 would turn into EXPIRED and give it away): hold for the poll like a real long-poll.
@@ -892,17 +992,7 @@ public final class EidLogin {
                 return error(502, "eid_unavailable");
             }
         }
-        if (res == null || !SessionResult.STATE_COMPLETE.equals(res.state())) {
-            long ms = Duration.between(clock.instant(), tx.expiresAt()).toMillis();
-            int left = (int) Math.floor(ms / 1000.0 + 0.999);
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("state", "PENDING");
-            out.put("vc", tx.vc());
-            out.put("expiresIn", Math.max(0, left));
-            String q = qrLink(tx);
-            if (!q.isEmpty()) out.put("qr", q);
-            return new Out().json(200, out);
-        }
+        if (res == null || !SessionResult.STATE_COMPLETE.equals(res.state())) return pending(tx);
         String endResult = res.endResult() == null ? "" : res.endResult();
         if (!SessionResult.END_RESULT_OK.equals(endResult)) {
             endEvent(tx, endResult);
@@ -946,7 +1036,14 @@ public final class EidLogin {
         String q = pathQuery(req.url())[1];
         String sid = queryParam(q, "sessionId");
         String verifier = queryParam(q, "userChallengeVerifier");
-        EidLoginTx tx = loadTx(req);
+        EidLoginTx tx;
+        try {
+            tx = loadTx(req);
+        } catch (RuntimeException e) {
+            // A store failure on a browser navigation: the failure page (303 eid_error=internal, Go), not a JSON 500.
+            log.log(System.Logger.Level.ERROR, "eidlogin: store: " + e.getClass().getSimpleName());
+            return fail("internal", null);
+        }
         // The starting browser's cookie is required: a callback opened in another browser (a stolen / forwarded URL) is refused.
         if (tx == null) return fail("expired", null);
         if (!tx.sessionId().equals(sid) || !MODE_WEB2APP.equals(tx.mode()) || verifier.isEmpty()) {
@@ -965,7 +1062,7 @@ public final class EidLogin {
         if (!SessionResult.STATE_COMPLETE.equals(res.state())) return fail("not_complete", null);
         String endResult = res.endResult() == null ? "" : res.endResult();
         if (!SessionResult.END_RESULT_OK.equals(endResult)) {
-            store.delete(tx.sessionId());
+            deleteQuietly(tx);
             endEvent(tx, endResult);
             return fail(orUnknown(endResult), null);
         }
@@ -978,13 +1075,22 @@ public final class EidLogin {
                 return fail("internal", null);
             }
             log.log(System.Logger.Level.WARNING, "eidlogin: баталгаажуулалт унасан: " + reasonOf(e));
-            store.delete(tx.sessionId());
+            deleteQuietly(tx);
             unverified(tx, e);
             return fail("VALIDATION", null);
         }
         if (s == null) return fail("expired", null);
         String to = s.redirect() == null || s.redirect().isEmpty() ? successRedirect : s.redirect();
         return new Out().add("Set-Cookie", clearCookie()).merge(s.headers()).redirect(303, to);
+    }
+
+    /** store.delete for the callback (Go deleteTx): a store failure is logged, the answer stays the redirect. */
+    private void deleteQuietly(EidLoginTx tx) {
+        try {
+            store.delete(tx.sessionId());
+        } catch (RuntimeException e) {
+            log.log(System.Logger.Level.ERROR, "eidlogin: store: " + e.getClass().getSimpleName());
+        }
     }
 
     private EidLoginResponse fail(String code, Map<String, List<String>> extra) {
@@ -1197,7 +1303,10 @@ public final class EidLogin {
             return this;
         }
 
-        /** How long one status call waits on eID (default 1 s). */
+        /**
+         * How long one status call waits on eID (default 1 s) — the thread is held for that long. Per session only one
+         * status call waits at a time; a concurrent one answers PENDING immediately.
+         */
         public Builder poll(Duration v) {
             poll = v;
             return this;
@@ -1235,6 +1344,9 @@ public final class EidLogin {
         /**
          * Per-kind limits ("start" — key "start:&lt;ip&gt;", "push" — "push:&lt;id&gt;"), MERGED with
          * {@link #defaultRateLimits()}: a given kind replaces its default; {@link RateRule#unlimited()} turns it off.
+         * The per-ID push limit is keyed by the number alone, so anyone who knows a citizen's ID number can use up its
+         * window and delay that citizen's PUSH sign-in for up to a window (inherent to push-by-ID; QR / Web2App are
+         * unaffected).
          *
          * @throws IllegalArgumentException (build) another kind
          */
@@ -1250,8 +1362,10 @@ public final class EidLogin {
         }
 
         /**
-         * The client IP for "start:&lt;ip&gt;" — e.g. {@link EidLogin#forwardedClientIp}(n) behind n trusted proxies. null =
-         * {@link EidLoginRequest#ip()} as the adapter set it (none → no per-IP limit).
+         * The client IP for "start:&lt;ip&gt;" — e.g. {@link EidLogin#forwardedClientIp}(n) behind n trusted proxies. It
+         * OVERRIDES the adapter's {@link EidLoginRequest#ip()}: never set it without a proxy (clients would choose their
+         * own key via X-Forwarded-For). An empty answer counts in one shared "start:unknown" bucket; IPv6 is keyed by
+         * its /64. null = the adapter's ip; neither → no per-IP limit (a one-time warning is logged).
          */
         public Builder clientIp(Function<EidLoginRequest, String> v) {
             clientIp = v;

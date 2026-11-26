@@ -388,11 +388,11 @@ public final class ResponseValidator {
 
     /**
      * Cross-SDK hardening (stricter than Go / TS): more than one SERIALNUMBER or more than one CN in the subject →
-     * {@link ValidationReasons#CERT_SUBJECT_AMBIGUOUS} — which one is "the" identity would depend on the parser.
+     * {@link ValidationReasons#SUBJECT_DUPLICATE_IDENTITY} — which one is "the" identity would depend on the parser.
      */
     static void checkSubject(Cert c) {
         if (c.subjectAttrCount(Cert.OID_SERIAL_NUMBER) > 1 || c.subjectAttrCount(Cert.OID_COMMON_NAME) > 1) {
-            throw invalid(ValidationReasons.CERT_SUBJECT_AMBIGUOUS, "гэрчилгээний subject-д SERIALNUMBER эсвэл CN олон удаа (serial "
+            throw invalid(ValidationReasons.SUBJECT_DUPLICATE_IDENTITY, "гэрчилгээний subject-д SERIALNUMBER эсвэл CN олон удаа (serial "
                 + c.serial.toString(16) + ")");
         }
     }

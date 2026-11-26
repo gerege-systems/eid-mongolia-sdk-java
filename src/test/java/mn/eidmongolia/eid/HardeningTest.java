@@ -16,7 +16,7 @@ import org.junit.Test;
 /**
  * The purely-stricter cross-SDK hardening (not in Go / TS): the RP OCSP checker verifies leaf ← issuer before any
  * network call and binds CertID by default; a subject with more than one SERIALNUMBER / CN is rejected
- * ({@link ValidationReasons#CERT_SUBJECT_AMBIGUOUS}). All 17 rp-conformance OCSP cases stay green with both
+ * ({@link ValidationReasons#SUBJECT_DUPLICATE_IDENTITY}). All 17 rp-conformance OCSP cases stay green with both
  * (ConformanceTest#ocsp runs the default builder).
  */
 public class HardeningTest {
@@ -73,12 +73,46 @@ public class HardeningTest {
                 ResponseValidator.checkSubject(c);
                 fail();
             } catch (EidException.Validation e) {
-                assertEquals(ValidationReasons.CERT_SUBJECT_AMBIGUOUS, e.reason());
+                assertEquals(ValidationReasons.SUBJECT_DUPLICATE_IDENTITY, e.reason());
                 assertTrue("no PII in the message", !e.getMessage().contains("PNOMN-"));
             }
         }
         TestCerts.Spec one = new TestCerts.Spec().attr("2.5.4.5", "PNOMN-1").cn("A");
         one.key = k;
         ResponseValidator.checkSubject(Cert.parse(TestCerts.cert(one)));
+    }
+
+    // Review: a path parameter that is empty, "." or ".." is never sent (it would change the route); revIndex is checked
+    // against the CA's 1…16 bound before any request.
+    @Test
+    public void pathParametersAndRevIndexBound() {
+        for (String bad : new String[] {"", ".", "..", null}) {
+            try {
+                Routes.SESSION.expand(bad);
+                fail(String.valueOf(bad));
+            } catch (IllegalArgumentException expected) {
+                // ok
+            }
+        }
+        assertEquals("/session/..x", Routes.SESSION.expand("..x"));
+        assertEquals("/session/a%2F..", Routes.SESSION.expand("a/.."));
+        FakeRp rp = FakeRp.reply(200, "{}");
+        EidClient c = rp.client();
+        Runnable[] calls = {
+            () -> c.session().poll("..", java.time.Duration.ofSeconds(1)),
+            () -> c.person().certificates("."),
+            () -> c.seal().certificate(""),
+            () -> c.pdf().registerSignature(PdfServiceTest.reg(17, mn.eidmongolia.eid.pades.Medium.TOKEN, null, null, null, null, null)),
+            () -> c.seal().seal("NTRMN-1234567", new byte[32], HashAlgorithm.SHA_256, "6f0c2b9e-3a1d-4c55-9b7e-0a1b2c3d4e5f", 17),
+        };
+        for (Runnable r : calls) {
+            try {
+                r.run();
+                fail("accepted");
+            } catch (IllegalArgumentException expected) {
+                // ok
+            }
+        }
+        assertEquals("nothing was sent", 0, rp.seen.size());
     }
 }

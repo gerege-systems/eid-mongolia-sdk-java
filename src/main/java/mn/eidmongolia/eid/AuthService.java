@@ -115,6 +115,14 @@ public final class AuthService {
         return fetchSessionTtl(http, null);
     }
 
+    /**
+     * {@link #sessionTtl()} with its own deadline instead of the client's per-call timeout (the login backend uses 2 s,
+     * as Go does). null / ≤ 0 = the client's timeout.
+     */
+    public SessionTtl sessionTtl(Duration timeout) {
+        return fetchSessionTtl(http, timeout);
+    }
+
     static SessionTtl fetchSessionTtl(RpHttp http, Duration timeout) {
         Json.Obj d = http.getJson(Routes.DISCOVERY_PATH, timeout).obj("GET " + Routes.DISCOVERY_PATH);
         Json.Obj t = d.optObj("sessionTtl");

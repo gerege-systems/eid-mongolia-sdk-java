@@ -203,7 +203,6 @@ byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                   
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient（trust：含国家根证书的 TrustConfig）
     .callbackUrl("https://bank.mn/auth/eid/callback")      // Web2App；路径必须为 /auth/eid/callback
     .failureRedirect("/login")
-    .clientIp(EidLogin.forwardedClientIp(1))               // 位于一个受信任代理之后；否则不要设置
     .onSuccess((id, req) -> {                              // id.etsi() = PNOMN-…；创建新的会话
         String sid = sessions.create(id.etsi());
         return new EidLoginSuccess("/home", null, Map.of("Set-Cookie", List.of("sid=" + sid + "; Path=/; HttpOnly; Secure; SameSite=Lax")));
@@ -211,32 +210,66 @@ EidLogin login = EidLogin.builder(eid)                      // eid = EidClient�
     .build();
 
 // JDK com.sun.net.httpserver
+HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
 server.createContext("/auth/eid/", new EidLoginHttpHandler(login, EidLoginHttpHandler.ClientIp.direct()));
+server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());   // Java 21+——必须设置（见下文）
+// server.setExecutor(Executors.newFixedThreadPool(64));           // Java 17：有界线程池
+server.start();
+// JVM 参数（秒）：-Dsun.net.httpserver.maxReqTime=10 -Dsun.net.httpserver.maxRspTime=30——或使用带超时的反向代理
 
 // Servlet（jakarta.servlet）——映射到 /auth/eid/*
 protected void service(HttpServletRequest rq, HttpServletResponse rs) throws IOException {
     Map<String, List<String>> h = new HashMap<>();
     for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
     String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
-    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h,
-        rq.getInputStream().readNBytes(4097), rq.getRemoteAddr()));   // getRemoteAddr：仅当前面没有代理时
+    byte[] body = rq.getInputStream().readNBytes(4097);          // 最多 4 KiB + 1——更大的由 EidLogin 拒绝
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
     rs.setStatus(r.status());
     r.headers().forEach((k, vs) -> vs.forEach(v -> rs.addHeader(k, v)));
     rs.getOutputStream().write(r.body().getBytes(StandardCharsets.UTF_8));
 }
 
-// Spring MVC
+// Spring MVC——自行有界地读取请求体（不要使用无界的 @RequestBody byte[]）
 @RequestMapping("/auth/eid/{op}")
-ResponseEntity<String> eid(HttpServletRequest rq, @RequestBody(required = false) byte[] body) {
+ResponseEntity<String> eid(HttpServletRequest rq) throws IOException {
     Map<String, List<String>> h = new HashMap<>();
     for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
     String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    byte[] body = rq.getInputStream().readNBytes(4097);
     EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
     HttpHeaders out = new HttpHeaders();
     r.headers().forEach(out::addAll);
     return new ResponseEntity<>(r.body(), out, HttpStatus.valueOf(r.status()));
 }
 ```
+
+**线程。** `handle` 是阻塞的：status 调用最多占用线程 `poll` 时长（默认 1 秒；每个登录同一时间只有一个——同一登录的并发
+status 调用立即返回 `PENDING`），push 启动至少占用 1 秒下限。请使用虚拟线程（Java 21+）或按并发登录数配置的有界线程池。
+未调用 `setExecutor` 的 JDK `HttpServer` 会在唯一的 dispatcher 线程上处理所有请求——一个缓慢或循环的客户端就会阻塞所有
+登录（handler 会记录一次警告）。JDK 服务器默认没有读取截止时间：请设置 `sun.net.httpserver.maxReqTime` / `maxRspTime`
+（秒），或在前面放置带请求超时的反向代理。
+
+**`start:<ip>` 限流的客户端 IP——以下两种只能选其一。**
+
+*A——客户端直接连接（无代理）：* 不要在 builder 上调用 `.clientIp(...)`。由适配器传入 socket 地址：
+`EidLoginHttpHandler.ClientIp.direct()`，Servlet / Spring 用 `rq.getRemoteAddr()`（如上）。
+
+*B——位于 N 个受信任反向代理之后（仅 nginx = 1）：*
+
+```java
+EidLogin login = EidLogin.builder(eid)
+    .clientIp(EidLogin.forwardedClientIp(1))               // X-Forwarded-For，从右数第 1 个值
+    // … 其余同上
+    .build();
+// JDK：ClientIp.trustedProxies(1) 在适配器中实现同样效果（此时不要设置 builder 的 clientIp）
+```
+
+> **警告：** builder 上的 `.clientIp(...)` 会覆盖适配器传入的地址。若把 B 复制到没有代理的部署中，每个客户端都可以通过
+> `X-Forwarded-For` 自选限流键。无法推导出的地址（代理链比配置的短）计入一个共享的 `start:unknown` 桶；IPv6 客户端按其
+> /64 前缀计数。完全没有 IP 来源时按 IP 的限流关闭，并记录一次警告。
+
+按号码的 push 限流（每个号码每分钟 3 次）仅以号码为键：任何知道公民身份号的人都可以耗尽该窗口，使该公民的 **push** 登录
+最多延迟一分钟——这是按号码推送的固有特性；QR 与 Web2App 不受影响。
 
 ## 开发
 

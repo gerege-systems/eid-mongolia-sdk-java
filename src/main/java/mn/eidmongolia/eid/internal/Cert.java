@@ -240,6 +240,8 @@ public final class Cert {
     }
 
     private boolean verifiesWith(Cert issuer) {
+        // ECDSA chain signatures: 0 < r, s < n before the JDK verifies (Sig.ecdsaDerInRange, CVE-2022-21449 class).
+        if (issuer.isEc() && !Sig.ecdsaDerInRange((ECPublicKey) issuer.publicKey(), x509.getSignature())) return false;
         try {
             x509.verify(issuer.publicKey());
             return true;

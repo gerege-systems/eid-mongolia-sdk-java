@@ -205,7 +205,6 @@ The backend of the browser `<eid-login-button>` (TS SDK) — the same JSON, cook
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: TrustConfig with the national root)
     .callbackUrl("https://bank.mn/auth/eid/callback")      // Web2App; path exactly /auth/eid/callback
     .failureRedirect("/login")
-    .clientIp(EidLogin.forwardedClientIp(1))               // behind ONE trusted proxy; else leave unset
     .onSuccess((id, req) -> {                              // id.etsi() = PNOMN-…; create a NEW session
         String sid = sessions.create(id.etsi());
         return new EidLoginSuccess("/home", null, Map.of("Set-Cookie", List.of("sid=" + sid + "; Path=/; HttpOnly; Secure; SameSite=Lax")));
@@ -213,32 +212,69 @@ EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (
     .build();
 
 // JDK com.sun.net.httpserver
+HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
 server.createContext("/auth/eid/", new EidLoginHttpHandler(login, EidLoginHttpHandler.ClientIp.direct()));
+server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());   // Java 21+ — REQUIRED (see below)
+// server.setExecutor(Executors.newFixedThreadPool(64));           // Java 17: a bounded pool
+server.start();
+// JVM flags (seconds): -Dsun.net.httpserver.maxReqTime=10 -Dsun.net.httpserver.maxRspTime=30 — or a reverse proxy with timeouts
 
 // Servlet (jakarta.servlet) — map to /auth/eid/*
 protected void service(HttpServletRequest rq, HttpServletResponse rs) throws IOException {
     Map<String, List<String>> h = new HashMap<>();
     for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
     String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
-    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h,
-        rq.getInputStream().readNBytes(4097), rq.getRemoteAddr()));   // getRemoteAddr: only if no proxy in front
+    byte[] body = rq.getInputStream().readNBytes(4097);          // at most 4 KiB + 1 — EidLogin rejects more
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
     rs.setStatus(r.status());
     r.headers().forEach((k, vs) -> vs.forEach(v -> rs.addHeader(k, v)));
     rs.getOutputStream().write(r.body().getBytes(StandardCharsets.UTF_8));
 }
 
-// Spring MVC
+// Spring MVC — read the body yourself, bounded (never an unbounded @RequestBody byte[])
 @RequestMapping("/auth/eid/{op}")
-ResponseEntity<String> eid(HttpServletRequest rq, @RequestBody(required = false) byte[] body) {
+ResponseEntity<String> eid(HttpServletRequest rq) throws IOException {
     Map<String, List<String>> h = new HashMap<>();
     for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
     String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    byte[] body = rq.getInputStream().readNBytes(4097);
     EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
     HttpHeaders out = new HttpHeaders();
     r.headers().forEach(out::addAll);
     return new ResponseEntity<>(r.body(), out, HttpStatus.valueOf(r.status()));
 }
 ```
+
+**Threads.** `handle` blocks: a status call holds its thread for up to `poll` (default 1 s; one at a time per sign-in — a
+concurrent status call for the same sign-in answers `PENDING` at once), a push start for at least the 1 s floor. Use
+virtual threads (Java 21+) or a bounded pool sized for your concurrent sign-ins. The JDK `HttpServer` without
+`setExecutor` runs every exchange on ONE dispatcher thread — one slow or looping client stalls all sign-ins (the handler
+logs a one-time warning). The JDK server has no read deadline by default: set `sun.net.httpserver.maxReqTime` /
+`maxRspTime` (seconds) or put a reverse proxy with request timeouts in front.
+
+**Client IP for the `start:<ip>` limit — pick exactly ONE of these.**
+
+*A — clients connect directly (no proxy):* do NOT call `.clientIp(...)` on the builder. The adapter passes the socket
+address: `EidLoginHttpHandler.ClientIp.direct()`, Servlet / Spring `rq.getRemoteAddr()` (as above).
+
+*B — behind N trusted reverse proxies (nginx alone = 1):*
+
+```java
+EidLogin login = EidLogin.builder(eid)
+    .clientIp(EidLogin.forwardedClientIp(1))               // X-Forwarded-For, 1st value from the right
+    // … as above
+    .build();
+// JDK: ClientIp.trustedProxies(1) does the same in the adapter (then leave the builder's clientIp unset)
+```
+
+> **Warning:** `.clientIp(...)` on the builder OVERRIDES the address the adapter passes. Copying B into a deployment
+> without a proxy lets every client choose its own rate-limit key via `X-Forwarded-For`. An address that cannot be
+> derived (a shorter proxy chain than configured) counts in one shared `start:unknown` bucket; IPv6 clients are keyed
+> by their /64. With no IP source at all the per-IP limit is off and a one-time warning is logged.
+
+The per-ID push limit (3 per minute per number) is keyed by the number alone: anyone who knows a citizen's ID number can
+use up its window and delay that citizen's **push** sign-in for up to a minute — inherent to push-by-ID; QR and Web2App
+are unaffected.
 
 ## Development
 

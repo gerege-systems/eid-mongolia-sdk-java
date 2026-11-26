@@ -3,7 +3,6 @@ package mn.eidmongolia.eid;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.security.PublicKey;
-import java.security.Signature;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECField;
@@ -11,6 +10,7 @@ import java.security.spec.ECFieldFp;
 import java.security.spec.ECParameterSpec;
 import java.util.Arrays;
 import java.util.Base64;
+import mn.eidmongolia.eid.internal.Sig;
 
 /**
  * Signature verification over a ready digest (Go validator.go {@code VerifyPrehashedSignature}; TS validator.ts
@@ -109,15 +109,9 @@ final class Prehashed {
         return jca("NONEwithRSA", k, t, sig);
     }
 
+    /** The JCA check via {@link Sig#verify} (ECDSA: 0 < r, s < n before the JDK sees the signature). */
     private static boolean jca(String alg, PublicKey pub, byte[] data, byte[] sig) {
-        try {
-            Signature s = Signature.getInstance(alg);
-            s.initVerify(pub);
-            s.update(data);
-            return s.verify(sig);
-        } catch (Exception e) {
-            return false;
-        }
+        return Sig.verify(alg, pub, data, sig);
     }
 
     /**
