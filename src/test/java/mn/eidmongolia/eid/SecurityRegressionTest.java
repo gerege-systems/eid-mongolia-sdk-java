@@ -405,7 +405,7 @@ public class SecurityRegressionTest {
             real.userChallenge(), real.flowType(), real.initialCallbackUrl(), new SignatureAlgorithmParameters(null, null, null, null, null),
             real.interactionTypeUsed(), null, null, null, null, null);
         expect(() -> v.validateAuth(noParams, ConformanceTest.acsp(auth.optObj("acsp"))), ValidationReasons.ALG_UNSUPPORTED);
-        expect(() -> ResponseValidator.certificateLevelOf(null, ResponseValidator.PROTOCOL_ACSP_V2), ValidationReasons.CERT_MALFORMED);
+        expect(() -> ResponseValidator.certificateLevelOf((X509Certificate) null, ResponseValidator.PROTOCOL_ACSP_V2), ValidationReasons.CERT_MALFORMED);
         try {
             new ResponseValidator(TrustConfig.builder().trustAnchorsPem((String) null).build());
             fail();
