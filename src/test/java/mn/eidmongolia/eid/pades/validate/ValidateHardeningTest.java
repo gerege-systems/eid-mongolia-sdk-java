@@ -483,19 +483,32 @@ public class ValidateHardeningTest {
     // certificate name — a mismatching /Name on an integrity-passing later signature does NOT flag earlier signatures.
     @Test
     public void laterStampNameIsNotCompared() throws Exception {
-        for (String in : new String[] {"later-stamp-name-mismatch", "later-stamp-name-control"}) {
-            Extract.Extracted ex = Extract.extract(res("validate/input/" + in + ".pdf"), NO_STAMPS);
-            assertEquals(in, 2, ex.sigs.size());
-            Extract.RawSignature first = ex.sigs.get(0), later = ex.sigs.get(0);
-            for (Extract.RawSignature s : ex.sigs) {
-                assertTrue(in, s.integrity);
-                if (s.signedEnd < first.signedEnd) first = s;
-                if (s.signedEnd > later.signedEnd) later = s;
+        ValidatePdfOptions o = ValidatePdfOptions.builder()
+            .roots(List.of(Cert.pemSingle(res("golden/pki/root.pem"))))
+            .issuers(List.of(Cert.pemSingle(res("golden/pki/04.pem")), Cert.pemSingle(res("validate/pki/05.pem"))))
+            .time(java.time.Instant.parse("2026-10-14T04:00:30Z"))
+            .offline(true)
+            .transport((method, url, ct, body) -> { throw new IOException("offline"); })
+            .build();
+        // mismatch: the later signature's certificate is QUALIFIED TESTOV, its /Name and stamp say GOLDEN TESTOV.
+        String[][] cases = {{"later-stamp-name-mismatch", "GOLDEN TESTOV"}, {"later-stamp-name-control", "QUALIFIED TESTOV"}};
+        for (String[] c : cases) {
+            PdfReport r = mn.eidmongolia.eid.pades.EidPades.validatePdf(res("validate/input/" + c[0] + ".pdf"), o);
+            assertEquals(c[0], 2, r.signatures().size());
+            PdfReport.SignatureReport first = r.signatures().get(0), later = r.signatures().get(1);
+            if (first.coversWholeDocument()) {
+                PdfReport.SignatureReport x = first;
+                first = later;
+                later = x;
             }
-            assertTrue(in, ex.metas.containsKey(later.objNum));
-            assertTrue(in + ": extended by signatures only", first.laterSignaturesOnly);
-            assertEquals(in, 1, first.laterSignatures);
-            assertTrue(in + ": visible later signature", first.laterVisible);
+            assertEquals(c[0], "valid", first.indication());
+            assertTrue(c[0] + " " + first.problems(), first.problems().isEmpty());
+            assertTrue(c[0] + ": extended by signatures only", first.extendedBySignaturesOnly());
+            assertTrue(c[0] + ": visible later signature", first.visibleLaterSignature());
+            assertEquals(c[0], 1, first.laterSignatures());
+            assertEquals(c[0], "QUALIFIED TESTOV", later.signerName());
+            assertEquals(c[0], c[1], later.claimedName());
+            assertTrue(c[0], later.visible());
         }
     }
 }
