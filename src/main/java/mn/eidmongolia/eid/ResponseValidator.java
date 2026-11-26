@@ -57,18 +57,10 @@ public final class ResponseValidator {
     private static final String EKU_ANY = "2.5.29.37.0";
     private static final String EKU_CLIENT_AUTH = "1.3.6.1.5.5.7.3.2";
     private static final String EKU_EMAIL_PROTECTION = "1.3.6.1.5.5.7.3.4";
-    /** The critical extensions the SDK understands (TS HANDLED_CRITICAL, Go handledCritical); any other → rejected. */
-    private static final Set<String> HANDLED_CRITICAL = Set.of(
-        "2.5.29.14", // subjectKeyIdentifier
-        "2.5.29.15", // keyUsage
-        "2.5.29.17", // subjectAltName
-        "2.5.29.19", // basicConstraints
-        "2.5.29.30", // nameConstraints (on a CA → caReason fail-closed)
-        "2.5.29.31", // cRLDistributionPoints
-        "2.5.29.32", // certificatePolicies
-        "2.5.29.35", // authorityKeyIdentifier
-        "2.5.29.37", // extKeyUsage
-        "1.3.6.1.5.5.7.1.1"); // authorityInfoAccess
+    /** The critical extensions the SDK understands — {@link Cert#HANDLED_CRITICAL} (TS HANDLED_CRITICAL, Go handledCritical). */
+    private static final Set<String> HANDLED_CRITICAL = Cert.HANDLED_CRITICAL;
+    /** The smallest RSA modulus accepted for a citizen, CA or OCSP-responder key (as EidQr.MIN_RSA_BITS). */
+    static final int MIN_RSA_BITS = 2048;
     private static final Map<String, Integer> LEVEL_RANK = Map.of("ADVANCED", 1, "QUALIFIED", 2, "QSCD", 3);
     private static final Pattern USER_CHALLENGE = Pattern.compile("^[A-Za-z0-9_-]{43}$");
     /** KeyUsage bit indices (X509Certificate#getKeyUsage). */
@@ -185,12 +177,13 @@ public final class ResponseValidator {
             throw invalid(ValidationReasons.FLOW_MISMATCH, "flowType " + nz(r.flowType()) + " ≠ эхлүүлсэн урсгал " + expected.wireName()
                 + " (relay байж болзошгүй)");
         }
-        String verifier = opts.userChallengeVerifier == null ? "" : opts.userChallengeVerifier;
+        String verifier = opts.userChallengeVerifier;
         boolean sameDevice = expected == FlowType.WEB2APP || expected == FlowType.APP2APP;
-        if (sameDevice && verifier.isEmpty()) {
+        if (sameDevice && (verifier == null || verifier.isEmpty())) {
             throw invalid(ValidationReasons.AUTH_VERIFIER_REQUIRED, expected.wireName() + " урсгалд callback-ийн userChallengeVerifier заавал");
         }
-        if (!verifier.isEmpty() && !EidCrypto.userChallengeOf(verifier).equals(nz(r.userChallenge()))) {
+        // Compared whenever given — also "" (TS rule, stricter than Go): a callback whose verifier was blanked must fail.
+        if (verifier != null && !EidCrypto.userChallengeOf(verifier).equals(nz(r.userChallenge()))) {
             throw invalid(ValidationReasons.AUTH_VERIFIER_MISMATCH, "userChallengeVerifier нь гарын үсэг зурагдсан userChallenge-тэй таарсангүй");
         }
         if (nz(r.interactionTypeUsed()).isEmpty()) throw invalid(ValidationReasons.AUTH_INTERACTION_TYPE_MISSING, "interactionTypeUsed алга");
@@ -506,11 +499,14 @@ public final class ResponseValidator {
      * @throws EidException.Validation qcStatements malformed ({@link ValidationReasons#LEVEL_QC_MALFORMED})
      */
     public static CertificateLevel certificateLevelOf(X509Certificate cert, String protocol) {
+        if (cert == null) throw invalid(ValidationReasons.CERT_MALFORMED, "гэрчилгээ алга");
+        Cert c;
         try {
-            return certificateLevelOf(Cert.parse(cert.getEncoded()), protocol);
-        } catch (CertificateEncodingException e) {
+            c = Cert.parse(cert.getEncoded());
+        } catch (CertificateEncodingException | IllegalArgumentException e) {
             throw invalid(ValidationReasons.CERT_MALFORMED, "гэрчилгээ задарсангүй");
         }
+        return certificateLevelOf(c, protocol);
     }
 
     static CertificateLevel certificateLevelOf(Cert c, String protocol) {
@@ -563,10 +559,10 @@ public final class ResponseValidator {
         if (alg.equals(SignatureAlgorithm.RSASSA_PSS.wireName())) {
             if (!isRsa) throw invalid(ValidationReasons.ALG_KEY_MISMATCH, "rsassa-pss нь RSA бус гэрчилгээтэй");
             SignatureAlgorithmParameters p = r.signatureAlgorithmParameters();
-            hash = p == null ? "" : p.hashAlgorithm();
+            hash = p == null ? "" : nz(p.hashAlgorithm());
             int hLen = Prehashed.hashLen(hash);
             if (hLen == 0) throw invalid(ValidationReasons.ALG_UNSUPPORTED, "дэмжигдээгүй hashAlgorithm: " + hash);
-            if (!p.maskGenHashAlgorithm().isEmpty() && !p.maskGenHashAlgorithm().equals(hash)) {
+            if (!nz(p.maskGenHashAlgorithm()).isEmpty() && !nz(p.maskGenHashAlgorithm()).equals(hash)) {
                 throw invalid(ValidationReasons.ALG_MGF1, "MGF1 hash нь hashAlgorithm-аас өөр");
             }
             if (p.saltLength() != null && p.saltLength() != hLen) throw invalid(ValidationReasons.ALG_SALT_LENGTH, "saltLength ≠ hLen");
@@ -655,7 +651,7 @@ public final class ResponseValidator {
         for (int i = 0; i < n; i++) {
             boolean isAnchor = i < anchors.size();
             Cert cand = isAnchor ? anchors.get(i) : intermediates.get(i - anchors.size());
-            if (containsSame(cas, cand) || !signedBy(cur, cand)) continue;
+            if (containsSame(cas, cand) || !signedBy(cur, cand, reason)) continue;
             Bad bad = caReason(cand, cas.size(), now, usage);
             if (bad != null) {
                 if (reason[0] == null) reason[0] = bad;
@@ -674,12 +670,22 @@ public final class ResponseValidator {
         return false;
     }
 
-    /** child issued by cand: issuer name = subject (DER), AKI = SKI when both present, signature (TS {@code signedBy}). */
-    private static boolean signedBy(Cert child, Cert cand) {
+    /**
+     * child issued by cand: issuer name = subject (DER), AKI = SKI when both present, signature (TS {@code signedBy}) by
+     * a chain algorithm — SHA-256/384/512 with RSA PKCS#1 v1.5, RSASSA-PSS or ECDSA (Go x509 rejects SHA-1 / MD5 chains);
+     * a matching issuer with a weaker algorithm is recorded as the chain reason.
+     */
+    private static boolean signedBy(Cert child, Cert cand, Bad[] reason) {
         if (!Arrays.equals(child.rawIssuer, cand.rawSubject)) return false;
         byte[] aki = child.authorityKeyId();
         byte[] ski = cand.subjectKeyId();
         if (aki.length > 0 && ski.length > 0 && !Arrays.equals(aki, ski)) return false;
+        if (!child.strongSignatureAlgorithm()) {
+            if (reason[0] == null) {
+                reason[0] = new Bad(ValidationReasons.CHAIN_UNTRUSTED, "гарын үсгийн алгоритм зөвшөөрөгдөөгүй (SHA-1 / MD5; зөвхөн SHA-2 RSA, RSASSA-PSS, ECDSA)");
+            }
+            return false;
+        }
         return child.signedBy(cand);
     }
 
@@ -702,6 +708,7 @@ public final class ResponseValidator {
     /** TS {@code caReason}: the issuer CA's checks; below = intermediate CAs under it (the leaf not counted). */
     private static Bad caReason(Cert ca, int below, Instant now, String usage) {
         if (!ca.isCa()) return new Bad(ValidationReasons.CHAIN_NOT_CA, "завсрын гэрчилгээ CA биш эсвэл keyCertSign эрхгүй");
+        if (ca.isRsa() && ca.rsaBits() < MIN_RSA_BITS) return new Bad(ValidationReasons.CHAIN_UNTRUSTED, "CA-ийн RSA түлхүүр 2048 битээс бага");
         if (ca.extensionValue(OID_KEY_USAGE) != null && !ku(ca, KU_KEY_CERT_SIGN)) {
             return new Bad(ValidationReasons.CHAIN_NOT_CA, "CA-ийн KeyUsage-д keyCertSign алга");
         }

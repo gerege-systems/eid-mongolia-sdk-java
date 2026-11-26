@@ -34,7 +34,8 @@ import mn.eidmongolia.eid.internal.Text;
  * returns «Миний мэдээлэл» (the app's dict as is, payload order). Same rules as the Go / TS / .NET SDKs
  * ({@code myqr_vectors.json}). No RP-API client here — only parsing and verification.
  *
- * <p>Thread-safe, no global mutable state. Network only for the default revocation check (the leaf's AIA OCSP).
+ * <p>Thread-safe. The only shared state is the default revocation check's process-wide OCSP cache (GOOD answers,
+ * at most 5 min / the response's nextUpdate). Network only for that default check (the leaf's AIA OCSP).
  */
 public final class EidQr {
     /** Prefix of the citizen app's QR: {@code EIDMN-QR1:<token>}. */
@@ -305,6 +306,19 @@ public final class EidQr {
             if (anchors.contains(cur)) anchored = true;
         }
         if (!anchored || path.size() < 2) throw err(EidQrException.CHAIN_INVALID, "the chain does not reach a trusted root");
+        // Fail-closed like the RP validator (TS verifyChain): no unknown critical extension anywhere, no CA with name
+        // constraints, pathLenConstraint (CAs below it, the leaf not counted), CA RSA keys ≥ 2048.
+        for (int i = 0; i < path.size(); i++) {
+            Cert c = path.get(i);
+            if (c.hasUnhandledCritical()) throw err(EidQrException.CHAIN_INVALID, "unknown critical extension (" + c.serialRef() + ")");
+            if (i == 0) continue;
+            if (c.extensionValue(Cert.OID_NAME_CONSTRAINTS) != null) {
+                throw err(EidQrException.CHAIN_INVALID, "CA with name constraints (" + c.serialRef() + ")");
+            }
+            Integer pathLen = c.maxPathLen();
+            if (pathLen != null && i - 1 > pathLen) throw err(EidQrException.CHAIN_INVALID, "pathLenConstraint exceeded (" + c.serialRef() + ")");
+            if (c.isRsa() && c.rsaBits() < MIN_RSA_BITS) throw err(EidQrException.CHAIN_INVALID, "CA RSA key < 2048 (" + c.serialRef() + ")");
+        }
         for (Cert c : path) {
             if (!validWithSkew(c, now)) throw err(EidQrException.CHAIN_INVALID, "certificate not valid now (" + c.serialRef() + ")");
         }
@@ -348,13 +362,14 @@ public final class EidQr {
 
     /** The shared default checker (its cache spans calls), created on first use. */
     private static final class DefaultOcsp {
-        static final OcspRevocationChecker CHECKER = OcspRevocationChecker.create();
+        static final OcspRevocationChecker CHECKER = OcspRevocationChecker.builder().bindCertId(true).build();
     }
 
     /**
      * Default revocation: the leaf's AIA OCSP by the RP SDK's {@link OcspRevocationChecker} — the Go {@code qrRevocation}
      * + {@code NewOCSPChecker} rule: OCSP «unknown» (the issuer never issued that serial) counts as revoked, thisUpdate
-     * must be within 48 h (+5 min skew), 2 s / 3 s timeouts. No acceptable answer → "unknown". (Before 0.2.0 this used the
+     * must be within 48 h (+5 min skew), 2 s / 3 s timeouts; plus the CertID issuer-hash binding the old check had
+     * ({@link OcspRevocationChecker.Builder#bindCertId}). No acceptable answer → "unknown". (Before 0.2.0 this used the
      * PAdES LTV rule: «unknown» → QR_REVOCATION_UNKNOWN and a 24 h window; the LTV rule itself is unchanged.)
      */
     static String defaultRevocation(Cert leaf, Cert issuer) {

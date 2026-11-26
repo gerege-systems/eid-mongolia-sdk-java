@@ -164,6 +164,7 @@ public class ConformanceTest {
         String doc = null;
         CertificateLevel level = null;
         String alg = "";
+        Subject subject = null;
         EidException err = null;
         try {
             switch (c.optString("kind")) {
@@ -172,6 +173,7 @@ public class ConformanceTest {
                         .expectedFlowType(FlowType.fromWire(o.optString("expectedFlowType")))
                         .userChallengeVerifier(o.optStringOrNull("userChallengeVerifier")).build());
                     cert = id.certificate();
+                    subject = id.subject();
                     doc = id.documentNumber();
                     level = id.certificateLevel();
                     assertEquals(cert.getSubjectX500Principal().getName(), id.subjectDn());
@@ -189,6 +191,7 @@ public class ConformanceTest {
                     assertTrue("hash " + h, h.isEmpty() || hash != null);
                     VerifiedSignature s = v.validateSign(r, c.optString("digest"), hash, sb.build());
                     cert = s.certificate();
+                    subject = s.subject();
                     doc = s.documentNumber();
                     level = s.certificateLevel();
                     alg = s.signatureAlgorithm();
@@ -198,6 +201,7 @@ public class ConformanceTest {
                 case "certificateChoice": {
                     Signer s = v.validateCertificateChoice(r, c.optString("certChoiceSessionId"));
                     cert = s.certificate();
+                    subject = s.subject();
                     doc = s.documentNumber();
                     level = s.certificateLevel();
                     assertEquals(c.optString("certChoiceSessionId"), s.certChoiceSessionId());
@@ -240,7 +244,9 @@ public class ConformanceTest {
             throw new IllegalStateException(e);
         }
         assertEquals(ok.optString("signatureAlgorithm"), alg);
-        Subject s = Subject.parse(cert);
+        // The identity the validator RETURNED (not a re-parse of the certificate).
+        Subject s = subject;
+        assertEquals(Subject.parse(cert), s);
         Json.Obj ws = ok.optObj("subject");
         Map<String, String> got = new LinkedHashMap<>();
         got.put("serialNumber", s.serialNumber());

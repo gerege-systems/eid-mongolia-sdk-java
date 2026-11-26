@@ -67,6 +67,7 @@ public final class OcspRevocationChecker implements RevocationChecker {
     private final Clock clock;
     private final Duration ttl;
     private final Consumer<OcspObservation> observer;
+    private final boolean bindCertId;
     private final Map<String, Instant> cache = new HashMap<>();
 
     private OcspRevocationChecker(Builder b) {
@@ -74,6 +75,7 @@ public final class OcspRevocationChecker implements RevocationChecker {
         this.clock = b.clock != null ? b.clock : Clock.systemUTC();
         this.ttl = b.cacheTtl == null || b.cacheTtl.isZero() ? DEFAULT_CACHE_TTL : b.cacheTtl;
         this.observer = b.observer;
+        this.bindCertId = b.bindCertId;
     }
 
     /** A checker with the defaults (own HTTP/1.1 client: 2 s connect, no redirects). */
@@ -114,12 +116,14 @@ public final class OcspRevocationChecker implements RevocationChecker {
             throw e;
         }
         String key = Text.hex(EidCrypto.digest("SHA-256", iss.raw)).substring(0, 16) + ":" + leaf.serial.toString(16);
+        Instant hit;
         synchronized (cache) {
-            Instant exp = cache.get(key);
-            if (exp != null && clock.instant().isBefore(exp)) {
-                emit(new OcspObservation(RevocationStatus.GOOD, "", Duration.ZERO, true, null));
-                return RevocationStatus.GOOD;
-            }
+            hit = cache.get(key);
+        }
+        if (hit != null && clock.instant().isBefore(hit)) {
+            // The observer runs outside the cache lock (a slow / re-entrant observer must not block other checks).
+            emit(new OcspObservation(RevocationStatus.GOOD, "", Duration.ZERO, true, null));
+            return RevocationStatus.GOOD;
         }
         // The total time across every AIA URL — the citizen is waiting on a poll.
         long start = System.nanoTime();
@@ -275,8 +279,15 @@ public final class OcspRevocationChecker implements RevocationChecker {
                 throw new EidException.Ocsp(EidException.Ocsp.Kind.SIGNATURE, responder, 0, "responder-ийн гэрчилгээ хугацаандаа биш", null);
             }
         }
+        Cert signer = rc != null ? rc : issuer;
+        if (signer.isRsa() && signer.rsaBits() < ResponseValidator.MIN_RSA_BITS) {
+            throw new EidException.Ocsp(EidException.Ocsp.Kind.SIGNATURE, responder, 0, "responder-ийн RSA түлхүүр 2048 битээс бага", null);
+        }
         if (resp.serial == null || !resp.serial.equals(leaf.serial)) {
             throw new EidException.Ocsp(EidException.Ocsp.Kind.INVALID, responder, 0, "хариу өөр serial-ийн тухай", null);
+        }
+        if (bindCertId && !Ocsp.certIdMatches(der, leaf, issuer)) {
+            throw new EidException.Ocsp(EidException.Ocsp.Kind.INVALID, responder, 0, "CertID энэ гэрчилгээ/олгогчийнх биш", null);
         }
         Instant tu = resp.thisUpdate.toInstant();
         if (tu.isAfter(now.plus(CLOCK_SKEW)) || tu.isBefore(now.minus(MAX_AGE))) {
@@ -294,6 +305,7 @@ public final class OcspRevocationChecker implements RevocationChecker {
         private Clock clock;
         private Duration cacheTtl;
         private Consumer<OcspObservation> observer;
+        private boolean bindCertId;
 
         private Builder() {
         }
@@ -328,6 +340,15 @@ public final class OcspRevocationChecker implements RevocationChecker {
          */
         public Builder observer(Consumer<OcspObservation> v) {
             observer = v;
+            return this;
+        }
+
+        /**
+         * true also requires every SingleResponse for the serial to carry the issuer's CertID issuerNameHash /
+         * issuerKeyHash (the PAdES LTV / «My QR» binding). Off by default — the Go / TS checkers compare the serial only.
+         */
+        public Builder bindCertId(boolean v) {
+            bindCertId = v;
             return this;
         }
 

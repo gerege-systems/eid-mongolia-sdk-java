@@ -16,6 +16,19 @@
 - Засвар (зан өөрчлөгдөнө): «Миний QR»-ийн анхдагч цуцлалт (`EidQr.verify`, `Trust.revocation` = null) одоо дээрх
   шалгагчаар — OCSP `unknown` → `QR_CERT_REVOKED` (өмнө нь `QR_REVOCATION_UNKNOWN`), thisUpdate-ийн цонх 48 ц (өмнө нь
   PAdES LTV-ийн 24 ц), timeout 2 с / 3 с (өмнө нь 10 с). Go/TS-ийн дүрэмтэй ижил. PAdES LTV-ийн 24 ц дүрэм өөрчлөгдөөгүй.
+- Аюулгүйн засвар (0.1.x-д мөн хамаарна — «Миний QR» ба PAdES): гэрчилгээг хоёр задлагч өөр байтаар уншиж болдог байв
+  — JDK `CertificateFactory` эхний байт 0x30 биш үед PEM гэж уншиж «-----BEGIN»-ээс өмнөхийг алгасдаг тул хуурамч
+  оролт JDK-д жинхэнэ гэрчилгээ (гарын үсэг, түлхүүр, хугацаа), гар задлагчид өөр TBS (subject/PNOMN, EKU,
+  qcStatements) харуулна. Одоо гэрчилгээний цорын ганц орц `Cert.parse` (бүх багц): эхний байт 0x30, JDK-ийн
+  `getEncoded()` оролттой байт-ижил (BER / илүү байт үгүй), serial / issuer / subject / extension-ийн олонлог хоёр
+  задлагчид ижил. Гинжийн гарын үсэг зөвхөн SHA-256/384/512 (RSA PKCS#1 v1.5, RSASSA-PSS, ECDSA) — SHA-1 / MD5
+  татгалзана (OCSP-ийн шигтгэсэн responder-т x/crypto-гийн дүрмээр SHA-1 зөвшөөрнө, MD5 үгүй); RSA түлхүүр ≥ 2048
+  (гарын үсэг шалгах, CA, OCSP responder); хоосон `userChallengeVerifier`-ийг ч тулгана (TS дүрэм); «Миний QR»-ийн
+  гинжинд validator-ийн fail-closed дүрэм (үл таних critical extension, name constraints, pathLen, CA RSA ≥ 2048), OCSP-д
+  CertID issuer-hash холбоос (`OcspRevocationChecker.Builder.bindCertId`); null талбартай гараар хийсэн record →
+  `Validation` (NPE биш); OCSP observer кэшийн lock-ийн гадна.
+- Дараагийн cross-SDK ажил (энэ PR-т биш): давхардсан SERIALNUMBER/CN-тэй гэрчилгээг бүх SDK-д татгалзах + corpus
+  кейс; RP OCSP шалгагчид CertID hash-ийн тулгалт (Go/TS/.NET); issuer allowlist-ийн AKI fallback.
 - Дотоод: DER / X.509 / signature-by-OID / ASN.1 time / OCSP туслахууд `mn.eidmongolia.eid.internal` багц руу шилжив
   (pades ба RP client хуваалцана; `pades`-ийн нийтийн API өөрчлөгдөөгүй). JSON уншигч хоёр хэвээр (бичигч нь өөр —
   Go-escape vs JS stringify).

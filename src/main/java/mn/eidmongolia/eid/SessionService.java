@@ -109,7 +109,7 @@ public final class SessionService {
             throw new EidException.Validation(ValidationReasons.SESSION_NOT_COMPLETE, "session дуусаагүй (state=" + r.state() + ")");
         }
         if (!SessionResult.END_RESULT_OK.equals(r.endResult())) {
-            throw new EidException.SessionFailed(r.endResult().isEmpty() ? "UNKNOWN" : r.endResult());
+            throw new EidException.SessionFailed(r.endResult() == null || r.endResult().isEmpty() ? "UNKNOWN" : r.endResult());
         }
         return r;
     }

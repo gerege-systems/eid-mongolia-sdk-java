@@ -87,6 +87,8 @@ final class Prehashed {
         if (sig.length == 0 || hLen == 0 || digest == null || digest.length != hLen || alg == null) return false;
         if (pub instanceof RSAPublicKey) {
             RSAPublicKey k = (RSAPublicKey) pub;
+            // RSA floor (as EidQr.MIN_RSA_BITS): a smaller modulus never verifies.
+            if (k.getModulus().bitLength() < ResponseValidator.MIN_RSA_BITS) return false;
             if (alg.equals(SignatureAlgorithm.RSASSA_PSS.wireName())) return rsaPssVerify(k, digest, sig, hash);
             if (alg.startsWith("sha") && alg.endsWith("WithRSAEncryption")) return pkcs1v15Verify(k, digest, sig, hash);
         } else if (pub instanceof ECPublicKey) {

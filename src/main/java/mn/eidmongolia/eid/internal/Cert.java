@@ -12,7 +12,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -89,16 +91,96 @@ public final class Cert {
         issuerAttrs = nameAttrs(Der.parse(rawIssuer));
     }
 
+    /**
+     * THE certificate entry point of the SDK (every package): DER only. The JDK parser and the hand parser above must
+     * read the SAME bytes — the JDK factory reads PEM (skipping any leading bytes up to "-----BEGIN") whenever the first
+     * byte is not 0x30, so a crafted input could show the JDK one certificate (signature, key, validity) and the hand
+     * parser another (subject, extensions). Hence: first byte 0x30 (SEQUENCE), the JDK's re-encoding byte-identical to
+     * the input (no BER, no non-minimal lengths, no trailing bytes — Go x509.ParseCertificate), and the hand-parsed
+     * serial, issuer, subject and extension sets equal to the JDK's.
+     *
+     * @throws IllegalArgumentException anything else
+     */
     public static Cert parse(byte[] der) {
+        if (der == null || der.length == 0 || (der[0] & 0xff) != Der.SEQUENCE) {
+            throw new IllegalArgumentException("certificate: not a DER SEQUENCE");
+        }
+        X509Certificate x;
         try {
-            X509Certificate x = (X509Certificate) CertificateFactory.getInstance("X.509")
-                .generateCertificate(new ByteArrayInputStream(der));
-            // The DER we keep is the input element itself (no trailing bytes, no re-encoding).
-            Der.Tlv t = Der.parse(der);
-            if (t.end != der.length) throw new IllegalArgumentException("trailing data after certificate");
-            return new Cert(der.clone(), x);
+            x = (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(der));
+            if (!Arrays.equals(x.getEncoded(), der)) throw new IllegalArgumentException("certificate: not DER or trailing data");
         } catch (java.security.cert.CertificateException e) {
             throw new IllegalArgumentException("certificate: " + e.getMessage(), e);
+        }
+        Cert c;
+        try {
+            Der.Tlv t = Der.parse(der);
+            if (t.tag != Der.SEQUENCE || t.end != der.length) throw new IllegalArgumentException("trailing data after certificate");
+            c = new Cert(der.clone(), x);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("certificate: " + e.getMessage(), e);
+        }
+        c.crossCheck();
+        return c;
+    }
+
+    /** The hand-parsed fields equal the JDK's (defence in depth on top of the byte-identity check). */
+    private void crossCheck() {
+        if (!serial.equals(x509.getSerialNumber())
+            || !Arrays.equals(rawIssuer, x509.getIssuerX500Principal().getEncoded())
+            || !Arrays.equals(rawSubject, x509.getSubjectX500Principal().getEncoded())) {
+            throw new IllegalArgumentException("certificate: serial / issuer / subject differ between parsers");
+        }
+        Set<String> crit = new HashSet<>();
+        Set<String> all = new HashSet<>();
+        for (Ext e : extensions) {
+            if (!all.add(e.oid)) throw new IllegalArgumentException("certificate: duplicate extension " + e.oid);
+            if (e.critical) crit.add(e.oid);
+        }
+        Set<String> jdkCrit = x509.getCriticalExtensionOIDs() == null ? Set.of() : x509.getCriticalExtensionOIDs();
+        Set<String> jdkAll = new HashSet<>(jdkCrit);
+        if (x509.getNonCriticalExtensionOIDs() != null) jdkAll.addAll(x509.getNonCriticalExtensionOIDs());
+        if (!crit.equals(jdkCrit) || !all.equals(jdkAll)) throw new IllegalArgumentException("certificate: extensions differ between parsers");
+    }
+
+    /** The RSA modulus size in bits; 0 for a non-RSA key. */
+    public int rsaBits() {
+        PublicKey k = publicKey();
+        return k instanceof RSAPublicKey ? ((RSAPublicKey) k).getModulus().bitLength() : 0;
+    }
+
+    private static final Set<String> STRONG_SIG_OIDS = Set.of(
+        "1.2.840.113549.1.1.11", // sha256WithRSAEncryption
+        "1.2.840.113549.1.1.12", // sha384WithRSAEncryption
+        "1.2.840.113549.1.1.13", // sha512WithRSAEncryption
+        "1.2.840.10045.4.3.2", // ecdsa-with-SHA256
+        "1.2.840.10045.4.3.3", // ecdsa-with-SHA384
+        "1.2.840.10045.4.3.4"); // ecdsa-with-SHA512
+    private static final String OID_RSASSA_PSS = "1.2.840.113549.1.1.10";
+    /** SHA-1 signatures — accepted only where the references accept them (x/crypto/ocsp embedded responder check). */
+    private static final Set<String> SHA1_SIG_OIDS = Set.of("1.2.840.113549.1.1.5", "1.2.840.10045.4.1");
+
+    /**
+     * This certificate's signature algorithm is one a chain may use (Go x509 {@code CheckSignatureFrom}): RSA PKCS#1
+     * v1.5 / ECDSA with SHA-256/384/512, or RSASSA-PSS with SHA-256/384/512, MGF1 of the same hash, salt = hash length,
+     * trailer 1. SHA-1, MD5, MD2 → false.
+     */
+    public boolean strongSignatureAlgorithm() {
+        String oid = x509.getSigAlgOID();
+        if (STRONG_SIG_OIDS.contains(oid)) return true;
+        if (!OID_RSASSA_PSS.equals(oid)) return false;
+        try {
+            java.security.AlgorithmParameters ap = java.security.AlgorithmParameters.getInstance("RSASSA-PSS");
+            ap.init(x509.getSigAlgParams());
+            java.security.spec.PSSParameterSpec p = ap.getParameterSpec(java.security.spec.PSSParameterSpec.class);
+            String h = p.getDigestAlgorithm();
+            int hLen = "SHA-256".equals(h) ? 32 : "SHA-384".equals(h) ? 48 : "SHA-512".equals(h) ? 64 : 0;
+            return hLen > 0 && "MGF1".equalsIgnoreCase(p.getMGFAlgorithm())
+                && p.getMGFParameters() instanceof java.security.spec.MGF1ParameterSpec
+                && h.equals(((java.security.spec.MGF1ParameterSpec) p.getMGFParameters()).getDigestAlgorithm())
+                && p.getSaltLength() == hLen && p.getTrailerField() == 1;
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -140,8 +222,23 @@ public final class Cert {
         return Arrays.hashCode(raw);
     }
 
-    /** The signature verifies with [issuer]'s key (Go `issuer.CheckSignature` — no CA checks; see [issuedBy]). */
+    /**
+     * A CHAIN signature: {@link #strongSignatureAlgorithm()} and it verifies with [issuer]'s key (Go
+     * {@code CheckSignatureFrom}'s signature part — no CA checks; see [issuedBy]).
+     */
     public boolean signedBy(Cert issuer) {
+        return strongSignatureAlgorithm() && verifiesWith(issuer);
+    }
+
+    /**
+     * x/crypto/ocsp's embedded-responder check ({@code issuer.CheckSignature}, which still allows SHA-1): a strong
+     * algorithm or SHA-1 (RSA / ECDSA), never MD5 / MD2, verifying with [issuer]'s key.
+     */
+    public boolean signedByAllowingSha1(Cert issuer) {
+        return (strongSignatureAlgorithm() || SHA1_SIG_OIDS.contains(x509.getSigAlgOID())) && verifiesWith(issuer);
+    }
+
+    private boolean verifiesWith(Cert issuer) {
         try {
             x509.verify(issuer.publicKey());
             return true;
@@ -223,6 +320,29 @@ public final class Cert {
         int n = 0;
         for (Ext e : extensions) if (e.oid.equals(oid)) n++;
         return n;
+    }
+
+    public static final String OID_NAME_CONSTRAINTS = "2.5.29.30";
+    /**
+     * The critical extensions the SDK understands (TS validator.ts HANDLED_CRITICAL, Go handledCritical); any other
+     * critical extension fails a chain (fail-closed).
+     */
+    public static final Set<String> HANDLED_CRITICAL = Set.of(
+        "2.5.29.14", // subjectKeyIdentifier
+        "2.5.29.15", // keyUsage
+        "2.5.29.17", // subjectAltName
+        "2.5.29.19", // basicConstraints
+        "2.5.29.30", // nameConstraints (on a CA rejected separately)
+        "2.5.29.31", // cRLDistributionPoints
+        "2.5.29.32", // certificatePolicies
+        "2.5.29.35", // authorityKeyIdentifier
+        "2.5.29.37", // extKeyUsage
+        "1.3.6.1.5.5.7.1.1"); // authorityInfoAccess
+
+    /** A critical extension outside {@link #HANDLED_CRITICAL}. */
+    public boolean hasUnhandledCritical() {
+        for (Ext e : extensions) if (e.critical && !HANDLED_CRITICAL.contains(e.oid)) return true;
+        return false;
     }
 
     /** OIDs of the extensions marked critical, in certificate order. */

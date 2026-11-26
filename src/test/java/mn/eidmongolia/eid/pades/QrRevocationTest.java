@@ -33,7 +33,7 @@ public class QrRevocationTest {
             return new EidHttpResponse((int) rep.getLong("status"), Map.of("Content-Type", List.of(rep.getString("contentType"))),
                 Base64.getDecoder().decode(rep.getString("bodyB64")));
         };
-        OcspRevocationChecker checker = OcspRevocationChecker.builder().transport(replay)
+        OcspRevocationChecker checker = OcspRevocationChecker.builder().transport(replay).bindCertId(true)
             .clock(Clock.fixed(Instant.parse(c.getString("now")), ZoneOffset.UTC)).build();
         Cert leaf = Cert.parse(Cert.pemSingle(Golden.resource("conformance/" + c.getString("certificate"))));
         Cert issuer = Cert.parse(Cert.pemSingle(Golden.resource("conformance/" + c.getString("issuer"))));

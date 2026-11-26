@@ -25,14 +25,14 @@ public final class TrustConfig {
     final String schemeName;
 
     private TrustConfig(Builder b) {
-        this.trustAnchorsPem = b.trustAnchorsPem == null ? List.of() : List.copyOf(b.trustAnchorsPem);
-        this.intermediatesPem = b.intermediatesPem == null ? null : List.copyOf(b.intermediatesPem);
+        this.trustAnchorsPem = copy(b.trustAnchorsPem);
+        this.intermediatesPem = b.intermediatesPem == null ? null : copy(b.intermediatesPem);
         this.requiredLevel = b.requiredLevel;
         this.clockSkew = b.clockSkew;
         this.allowUntrusted = b.allowUntrusted;
         this.revocation = b.revocation;
         this.revocationMode = b.revocationMode;
-        this.allowedIssuerSkis = b.allowedIssuerSkis == null ? List.of() : List.copyOf(b.allowedIssuerSkis);
+        this.allowedIssuerSkis = copy(b.allowedIssuerSkis);
         this.allowAnyIssuer = b.allowAnyIssuer;
         this.skipKeyUsageCheck = b.skipKeyUsageCheck;
         this.schemeName = b.schemeName;
@@ -40,6 +40,11 @@ public final class TrustConfig {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    /** An unmodifiable copy that keeps null elements (rejected by the validator with IllegalArgumentException, not NPE). */
+    private static List<String> copy(List<String> l) {
+        return l == null ? List.of() : java.util.Collections.unmodifiableList(new java.util.ArrayList<>(l));
     }
 
     /** {@link TrustConfig} fields; unset values take the defaults. */
@@ -64,7 +69,7 @@ public final class TrustConfig {
          * REQUIRED in production — empty fails every validation (only {@link #allowUntrusted} skips the chain).
          */
         public Builder trustAnchorsPem(String... pems) {
-            trustAnchorsPem = List.of(pems);
+            trustAnchorsPem = pems == null ? null : java.util.Arrays.asList(pems);
             return this;
         }
 

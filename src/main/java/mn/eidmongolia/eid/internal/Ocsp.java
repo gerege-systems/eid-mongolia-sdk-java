@@ -80,7 +80,7 @@ public final class Ocsp {
             for (int k = 1; k < certs.size(); k++) Cert.parse(certs.get(k).encoded());
         }
         if (responder != null) {
-            check(responder.equals(issuer) || responder.signedBy(issuer), "OCSP responder not issued by the issuer");
+            check(responder.equals(issuer) || responder.signedByAllowingSha1(issuer), "OCSP responder not issued by the issuer");
             check(Sig.verifyOid(sigOid, responder.publicKey(), tbs.encoded(), sig), "OCSP signature");
         } else {
             check(Sig.verifyOid(sigOid, issuer.publicKey(), tbs.encoded(), sig), "OCSP signature");
@@ -320,7 +320,7 @@ public final class Ocsp {
         out = new Parsed(one.status, one.serial, one.thisUpdate, one.nextUpdate, embedded, tbs.encoded(), sigOid, sig);
         if (embedded != null) {
             if (!out.signedBy(embedded)) throw new ParseException(KIND_SIGNATURE, "bad signature on embedded certificate");
-            if (issuer != null && !embedded.signedBy(issuer)) throw new ParseException(KIND_SIGNATURE, "bad OCSP signature");
+            if (issuer != null && !embedded.signedByAllowingSha1(issuer)) throw new ParseException(KIND_SIGNATURE, "bad OCSP signature");
         } else if (issuer != null && !out.signedBy(issuer)) {
             throw new ParseException(KIND_SIGNATURE, "bad OCSP signature");
         }

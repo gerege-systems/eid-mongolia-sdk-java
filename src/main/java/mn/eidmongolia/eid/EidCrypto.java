@@ -94,7 +94,7 @@ public final class EidCrypto {
     /**
      * A signature over a ready digest (Go {@code VerifyPrehashedSignature}, TS {@code verifyPrehashedSignature}):
      * rsassa-pss (MGF1 with the same hash, salt = hLen), shaNNNWithRSAEncryption (PKCS#1 v1.5), ecdsa-with-SHA256 (P-256,
-     * SHA-256, ASN.1 DER — not IEEE P1363). A key type that does not fit the algorithm, or a digest whose length is not
+     * SHA-256, ASN.1 DER — not IEEE P1363). RSA keys below 2048 bits, a key type that does not fit the algorithm, or a digest whose length is not
      * the hash's → false.
      */
     public static boolean verifyPrehashedSignature(byte[] digest, String sigB64, java.security.PublicKey pub, String alg, String hash) {
