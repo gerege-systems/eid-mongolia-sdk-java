@@ -195,6 +195,49 @@ byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                   
 - 验证：CA 的 `devicelink_golden.json`（未修改副本，固定 SHA-256）、Smart-ID ACSP_V2 向量、与 `JSON.stringify`
   字节一致的 interactions 用例；`contract.yml` 每天将路由表与线上 `/.well-known/eid` 对照。
 
+### “使用 eID 登录”按钮后端（`mn.eidmongolia.eid.login`）
+
+浏览器 `<eid-login-button>`（TS SDK）的后端——JSON、cookie 与状态码同 Go `eidlogin` / TS `createEidLogin`（通过 `eidlogin/1` 一致性语料的全部 24 个场景）。`EidLogin.handle(EidLoginRequest)` 与框架无关；JDK 服务器用 `EidLoginHttpHandler`，Servlet / Spring 见下例。推送不会泄露号码是否已注册（诱饵会话、1 秒下限）；cookie 为 HttpOnly + Secure + SameSite=Lax；状态保存在服务器（`EidLoginStore`，默认内存）；默认启用 OCSP 吊销检查（soft-fail）。
+
+```java
+EidLogin login = EidLogin.builder(eid)                      // eid = EidClient（trust：含国家根证书的 TrustConfig）
+    .callbackUrl("https://bank.mn/auth/eid/callback")      // Web2App；路径必须为 /auth/eid/callback
+    .failureRedirect("/login")
+    .clientIp(EidLogin.forwardedClientIp(1))               // 位于一个受信任代理之后；否则不要设置
+    .onSuccess((id, req) -> {                              // id.etsi() = PNOMN-…；创建新的会话
+        String sid = sessions.create(id.etsi());
+        return new EidLoginSuccess("/home", null, Map.of("Set-Cookie", List.of("sid=" + sid + "; Path=/; HttpOnly; Secure; SameSite=Lax")));
+    })
+    .build();
+
+// JDK com.sun.net.httpserver
+server.createContext("/auth/eid/", new EidLoginHttpHandler(login, EidLoginHttpHandler.ClientIp.direct()));
+
+// Servlet（jakarta.servlet）——映射到 /auth/eid/*
+protected void service(HttpServletRequest rq, HttpServletResponse rs) throws IOException {
+    Map<String, List<String>> h = new HashMap<>();
+    for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
+    String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h,
+        rq.getInputStream().readNBytes(4097), rq.getRemoteAddr()));   // getRemoteAddr：仅当前面没有代理时
+    rs.setStatus(r.status());
+    r.headers().forEach((k, vs) -> vs.forEach(v -> rs.addHeader(k, v)));
+    rs.getOutputStream().write(r.body().getBytes(StandardCharsets.UTF_8));
+}
+
+// Spring MVC
+@RequestMapping("/auth/eid/{op}")
+ResponseEntity<String> eid(HttpServletRequest rq, @RequestBody(required = false) byte[] body) {
+    Map<String, List<String>> h = new HashMap<>();
+    for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
+    String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
+    HttpHeaders out = new HttpHeaders();
+    r.headers().forEach(out::addAll);
+    return new ResponseEntity<>(r.body(), out, HttpStatus.valueOf(r.status()));
+}
+```
+
 ## 开发
 
 - Profile 规则：Go 仓库的 `pades/PROFILE.md`、`PAGE_SPEC.md`、`PRECHECKS.md`、`WIRE.md`、`APPEARANCE_SPEC.md`、

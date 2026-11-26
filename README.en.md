@@ -197,6 +197,49 @@ byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                   
   `JSON.stringify`-byte-identical interactions cases; `contract.yml` checks the route table against the live
   `/.well-known/eid` daily.
 
+### "Sign in with eID" button backend (`mn.eidmongolia.eid.login`)
+
+The backend of the browser `<eid-login-button>` (TS SDK) — the same JSON, cookie and status codes as Go `eidlogin` / TS `createEidLogin` (all 24 scenarios of the `eidlogin/1` conformance corpus). `EidLogin.handle(EidLoginRequest)` is framework neutral; `EidLoginHttpHandler` for the JDK server, the snippets below for Servlet / Spring. A push never reveals whether a number is registered (decoy, 1 s floor); the cookie is HttpOnly + Secure + SameSite=Lax; the state stays on the server (`EidLoginStore`, memory by default); OCSP revocation on by default (soft-fail).
+
+```java
+EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: TrustConfig with the national root)
+    .callbackUrl("https://bank.mn/auth/eid/callback")      // Web2App; path exactly /auth/eid/callback
+    .failureRedirect("/login")
+    .clientIp(EidLogin.forwardedClientIp(1))               // behind ONE trusted proxy; else leave unset
+    .onSuccess((id, req) -> {                              // id.etsi() = PNOMN-…; create a NEW session
+        String sid = sessions.create(id.etsi());
+        return new EidLoginSuccess("/home", null, Map.of("Set-Cookie", List.of("sid=" + sid + "; Path=/; HttpOnly; Secure; SameSite=Lax")));
+    })
+    .build();
+
+// JDK com.sun.net.httpserver
+server.createContext("/auth/eid/", new EidLoginHttpHandler(login, EidLoginHttpHandler.ClientIp.direct()));
+
+// Servlet (jakarta.servlet) — map to /auth/eid/*
+protected void service(HttpServletRequest rq, HttpServletResponse rs) throws IOException {
+    Map<String, List<String>> h = new HashMap<>();
+    for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
+    String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h,
+        rq.getInputStream().readNBytes(4097), rq.getRemoteAddr()));   // getRemoteAddr: only if no proxy in front
+    rs.setStatus(r.status());
+    r.headers().forEach((k, vs) -> vs.forEach(v -> rs.addHeader(k, v)));
+    rs.getOutputStream().write(r.body().getBytes(StandardCharsets.UTF_8));
+}
+
+// Spring MVC
+@RequestMapping("/auth/eid/{op}")
+ResponseEntity<String> eid(HttpServletRequest rq, @RequestBody(required = false) byte[] body) {
+    Map<String, List<String>> h = new HashMap<>();
+    for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
+    String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
+    HttpHeaders out = new HttpHeaders();
+    r.headers().forEach(out::addAll);
+    return new ResponseEntity<>(r.body(), out, HttpStatus.valueOf(r.status()));
+}
+```
+
 ## Development
 
 - Profile rules: the Go repo's `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`,

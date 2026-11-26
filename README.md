@@ -195,6 +195,49 @@ byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                   
 - Шалгалт: CA-ийн `devicelink_golden.json` (засваргүй хуулбар, SHA-256 бэхэлсэн), Smart-ID ACSP_V2 вектор, interactions-ийн
   `JSON.stringify` байт-ижил тохиолдлууд; `contract.yml` замын хүснэгтийг live `/.well-known/eid`-тэй өдөр бүр тулгана.
 
+### «eID-ээр нэвтрэх» товчны backend (`mn.eidmongolia.eid.login`)
+
+Хөтчийн `<eid-login-button>` (TS SDK) ашигладаг backend — Go `eidlogin` / TS `createEidLogin`-тэй ижил JSON, cookie, статус код (conformance `eidlogin/1`-ийн 24 сценари). `EidLogin.handle(EidLoginRequest)` нь framework-аас хамааралгүй; JDK серверт `EidLoginHttpHandler`, Servlet / Spring-д доорх жишээ. Push нь бүртгэлтэй эсэхийг задлахгүй (decoy, 1 с доод хугацаа), cookie нь HttpOnly + Secure + SameSite=Lax, төлөв серверт (`EidLoginStore`, анхдагч санах ой), OCSP цуцлалт анхдагчаар (soft-fail).
+
+```java
+EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: үндэсний root-тэй TrustConfig)
+    .callbackUrl("https://bank.mn/auth/eid/callback")      // Web2App; зам яг /auth/eid/callback
+    .failureRedirect("/login")
+    .clientIp(EidLogin.forwardedClientIp(1))               // НЭГ итгэмжит proxy-ийн ард; эс бөгөөс бүү өг
+    .onSuccess((id, req) -> {                              // id.etsi() = PNOMN-…; ШИНЭ session үүсгэ
+        String sid = sessions.create(id.etsi());
+        return new EidLoginSuccess("/home", null, Map.of("Set-Cookie", List.of("sid=" + sid + "; Path=/; HttpOnly; Secure; SameSite=Lax")));
+    })
+    .build();
+
+// JDK com.sun.net.httpserver
+server.createContext("/auth/eid/", new EidLoginHttpHandler(login, EidLoginHttpHandler.ClientIp.direct()));
+
+// Servlet (jakarta.servlet) — /auth/eid/* руу
+protected void service(HttpServletRequest rq, HttpServletResponse rs) throws IOException {
+    Map<String, List<String>> h = new HashMap<>();
+    for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
+    String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h,
+        rq.getInputStream().readNBytes(4097), rq.getRemoteAddr()));   // getRemoteAddr: урд нь proxy байхгүй үед л
+    rs.setStatus(r.status());
+    r.headers().forEach((k, vs) -> vs.forEach(v -> rs.addHeader(k, v)));
+    rs.getOutputStream().write(r.body().getBytes(StandardCharsets.UTF_8));
+}
+
+// Spring MVC
+@RequestMapping("/auth/eid/{op}")
+ResponseEntity<String> eid(HttpServletRequest rq, @RequestBody(required = false) byte[] body) {
+    Map<String, List<String>> h = new HashMap<>();
+    for (String n : Collections.list(rq.getHeaderNames())) h.put(n, Collections.list(rq.getHeaders(n)));
+    String url = rq.getRequestURI() + (rq.getQueryString() == null ? "" : "?" + rq.getQueryString());
+    EidLoginResponse r = login.handle(new EidLoginRequest(rq.getMethod(), url, h, body, rq.getRemoteAddr()));
+    HttpHeaders out = new HttpHeaders();
+    r.headers().forEach(out::addAll);
+    return new ResponseEntity<>(r.body(), out, HttpStatus.valueOf(r.status()));
+}
+```
+
 ## Хөгжүүлэлт
 
 - Профайлын дүрэм: Go репогийн `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`,
