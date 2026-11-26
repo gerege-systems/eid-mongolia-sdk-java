@@ -13,13 +13,13 @@ requests, DSS).
 Full documentation: <https://developer.eidmongolia.mn/#overview>.
 
 - Java 17+, **no runtime dependencies** — `java.security` + a small DER writer (no BouncyCastle, Jackson or Kotlin).
-- Thread-safe, no global state. The network is used only in `complete` (TSA, OCSP/CRL) and in `EidQr.verify`'s default OCSP.
-- **The RP-API client is not complete yet** (`mn.eidmongolia.eid` — in progress, see below). Starting a citizen session, obtaining a `RAW_DIGEST_SIGNATURE` signature, `POST /pdf/signatures`,
-  `POST /authentication/qr` and so on are done by calling the RP-API directly over HTTPS/JSON —
-  [RP-API documentation](https://developer.eidmongolia.mn/#overview). This library only prepares/embeds the PDF, assembles the registration body,
-  and parses/verifies "My QR".
-- There is **no** full validator — verification: by the file's SHA-256 against the CA's registry; full cryptographic validation is in the Go
-  backend SDK.
+- Thread-safe, no global state. PAdES uses the network only in `complete` (TSA, OCSP/CRL) and in `EidQr.verify`'s default OCSP.
+- **Full RP-API client** (`mn.eidmongolia.eid`, since 0.2.0): authentication, signing, sessions, the response validator
+  with OCSP revocation, PDF signature registration, organisation / person / e-Seal / token / share, the «My QR» client
+  and the «Sign in with eID» button backend — the same scope as the Go and TypeScript SDKs (support matrix below).
+- Not yet: verifying a signed PDF (ValidatePDF) — check it by the file's SHA-256 against the CA's registry, or use the
+  Go / TS SDK.
+
 
 Other SDKs: [Go](https://github.com/gerege-systems/eid-mongolia-sdk-go) ·
 [.NET](https://github.com/gerege-systems/eid-mongolia-sdk-dotnet) ·
@@ -40,7 +40,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.1.1")
+    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.2.0")
 }
 ```
 
@@ -53,7 +53,7 @@ Maven:
 <dependency>
   <groupId>com.github.gerege-systems</groupId>
   <artifactId>eid-mongolia-sdk-java</artifactId>
-  <version>0.1.1</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
@@ -168,38 +168,157 @@ Codes (`EidQrException.code()`): `QR_FORMAT_INVALID`, `QR_JWS_MALFORMED`, `QR_HE
 `QR_SESSION_MISMATCH`, `QR_NONCE_MISMATCH`, `QR_NOT_YET_VALID`, `QR_EXPIRED`, `QR_DATA_INVALID`. The RP-API's HTTP errors
 (`QR_TOKEN_INVALID`, `QR_PRESENTATION_GONE` …) arrive in your HTTP client.
 
-## RP-API client (`mn.eidmongolia.eid`) — in progress
+## RP-API client (`mn.eidmongolia.eid`)
 
-> **In progress.** An RP-API client with the same scope as the Go / TS SDKs is being added to this artifact in stages
-> (coordinates unchanged). Available now: configuration, transport, errors, route table, wire types, discovery
-> `sessionTtl`, crypto helpers. Auth / Sign / Session / Validator come in the next releases — until then call the RP-API
-> directly over HTTPS/JSON.
+The full relying-party SDK — the same scope and wire behaviour as the Go and TypeScript SDKs (cross-SDK conformance
+corpus `rp-conformance/1`: wire, validator, OCSP, ACSP, interactions; `eidlogin/1` for the sign-in button backend).
+Every call is blocking (fine on virtual threads); `Thread.interrupt()` cancels a call in flight
+(`EidException.Network#cancelled`).
+
+### Client, trust and mTLS
 
 ```java
+TrustConfig trust = TrustConfig.builder()
+    .trustAnchorsPem(Roots.NATIONAL_ROOT_CA_PEM)          // embedded national root (01); 02–04 are built in
+    .revocation(OcspRevocationChecker.create())           // OCSP for checkRevocation (off when unset)
+    .revocationMode(RevocationMode.HARD_FAIL)             // the validator's default once a checker is set
+    .build();
 EidClient eid = EidClient.builder(new Credentials(rpUuid, "Internet bank", apiSecret))
-    .transport(JdkHttpTransport.create(sslContext))   // for mTLS; default JdkHttpTransport.create()
-    .language("en")                                   // Accept-Language
-    .build();                                         // baseUrl defaults to https://rp.eidmongolia.mn
-SessionTtl ttl = eid.auth().sessionTtl();             // discovery: auth / sign session lifetimes
-
-String link = DeviceLink.build(session.linkInput(DeviceLinkType.QR, "eng").build());  // authCode = HMAC-SHA256
-String interactions = EidCrypto.interactionsToBase64(List.of(Interaction.displayTextAndPin("Log in")));
-byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                          // ACSP_V2
+    .trust(trust)
+    .transport(JdkHttpTransport.create(sslContext))      // mTLS: your client certificate in the SSLContext; default create()
+    .language("en")                                      // Accept-Language
+    .build();                                            // baseUrl defaults to https://rp.eidmongolia.mn
+SessionTtl ttl = eid.auth().sessionTtl();                // discovery: auth / sign session lifetimes
 ```
 
 - `baseUrl`: https only (http only for localhost / loopback), the legacy `ca.eidmongolia.mn` host is a clear error;
-  Bearer API secret; a total deadline per call (default 15 s, PDF 80 s); JSON responses ≤ 4 MiB; no redirects.
-- Blocking calls (fine on virtual threads); `Thread.interrupt()` cancels a call (`EidException.Network#cancelled`).
+  Bearer API secret; a total deadline per call (default 15 s, PDF registration 80 s); JSON responses ≤ 4 MiB; no redirects.
 - Errors: `EidException` (unchecked) — `Authentication` (401), `Forbidden` (403), `Api` with a subclass per code
-  (`NoSigningCertificate`, `SealServiceDisabled` …), `Network`, `ResponseTooLarge`, `SessionFailed`, `Validation`,
-  `DeviceLink`; all have `code()`, `status()`, `retryAfter()`, `retryable()`. Messages / `op` never contain citizen IDs.
-- Verified by: the CA's `devicelink_golden.json` (unedited copy, SHA-256 pinned), the Smart-ID ACSP_V2 vector,
-  `JSON.stringify`-byte-identical interactions cases; `contract.yml` checks the route table against the live
-  `/.well-known/eid` daily.
+  (`NoSigningCertificate`, `SealServiceDisabled` …), `Network`, `ResponseTooLarge`, `SessionFailed`, `Validation`
+  (`reason()` = the corpus's stable key, e.g. `chain.untrusted`), `Ocsp`, `DeviceLink`; all have `code()`, `status()`,
+  `retryAfter()`, `retryable()`. Messages never contain citizen ID numbers. No automatic retries (as Go / TS).
 
-### "Sign in with eID" button backend (`mn.eidmongolia.eid.login`)
+### Authentication: push and QR
 
-The backend of the browser `<eid-login-button>` (TS SDK) — the same JSON, cookie and status codes as Go `eidlogin` / TS `createEidLogin` (all 24 scenarios of the `eidlogin/1` conformance corpus). `EidLogin.handle(EidLoginRequest)` is framework neutral; `EidLoginHttpHandler` for the JDK server, the snippets below for Servlet / Spring. A push never reveals whether a number is registered (decoy, 1 s floor); the cookie is HttpOnly + Secure + SameSite=Lax; the state stays on the server (`EidLoginStore`, memory by default); OCSP revocation on by default (soft-fail).
+```java
+List<Interaction> ix = List.of(Interaction.displayTextAndPin("Log in to Internet bank"));
+
+// Push to the citizen's phone (national ID, civil ID or ETSI PNOMN-…)
+NotificationSession push = eid.auth().notificationByEtsi("УБ12345678", ix, null);
+show(push.vc());                                          // the verification code the citizen compares
+
+// QR on your page (anonymous device link): a fresh QR link every second
+DeviceLinkSession qr = eid.auth().deviceLinkAnonymous(ix, null);
+Thread ticker = new Thread(() -> {
+    try {
+        DeviceLink.tickQr(qr.linkInput(DeviceLinkType.QR, "eng").build(), Duration.ofSeconds(1), link -> render(link));
+    } catch (InterruptedException e) { /* stopped */ }
+});
+ticker.start();
+
+// Session: wait for the result, then validate (chain + ACSP_V2 signature + flow type)
+SessionResult res = eid.session().waitForResult(qr.sessionId(), WaitOptions.builder().expiresAt(qr.expiresAt()).build());
+ticker.interrupt();
+VerifiedIdentity id = eid.validator().validateAuth(res, qr.acsp(),
+    ValidateAuthOptions.builder().expectedFlowType(FlowType.QR).build());
+eid.validator().checkRevocation(id.certificate());       // OCSP (TrustConfig.revocation)
+String etsi = id.subject().serialNumber();                // PNOMN-…
+```
+
+`session().poll(sessionId, serverPoll)` is the single long-poll; `waitForResult` loops until COMPLETE or the deadline
+(`maxWait` → `expiresAt` → discovery `sessionTtl` → 600 s, + 15 s). Web2App / App2App: pass `callbackUrl` in
+`AuthOptions` and give the callback's `userChallengeVerifier` to `ValidateAuthOptions` (required for those flows).
+
+### Validator and revocation
+
+`client.validator()` = `ResponseValidator`: `validateAuth` (ACSP_V2: flow-type relay check, userChallengeVerifier,
+callback rule, algorithm / hash downgrade checks, signature), `validateSign` (RAW_DIGEST: prehashed RSASSA-PSS,
+PKCS#1 v1.5, ECDSA P-256), `validateCertificateChoice` → `Signer`. Chains are built by a deterministic hand-written path
+builder (no PKIX): embedded roots, issuer SKI allowlist, clock skew, pathLen, KeyUsage / EKU, fail-closed on name
+constraints and unknown critical extensions, SHA-2 chain signatures only, RSA ≥ 2048, a certificate subject with more
+than one SERIALNUMBER or CN is rejected (`subject.duplicate_identity`).
+
+Revocation (`OcspRevocationChecker`: OCSP `unknown` = revoked, thisUpdate within 48 h, cache ≤ 5 min, 2 s per request /
+3 s total, CertID bound to the issuer):
+
+| Where | Default | What happens without an OCSP answer |
+|---|---|---|
+| `validator().checkRevocation` | **off** until `TrustConfig.revocation(...)` is set | `HARD_FAIL` (the default once set) → `EidException.Validation`; `SOFT_FAIL` → accepted as `UNCHECKED` |
+| Sign-in button backend (`EidLogin`) | OCSP **on**, **soft-fail** | accepted, logged, `identity.revocation() == UNCHECKED` |
+| My QR (`EidQr.verify`, `client.qr()`) | OCSP on, hard-fail | `QR_REVOCATION_UNKNOWN` |
+
+The sign-in backend defaults to **soft-fail** (an OCSP outage does not lock everyone out). **High-value relying parties
+(banking, notaries, anything with money or legal effect) should use hard-fail**: `EidLogin.builder(eid)
+.revocationMode(RevocationMode.HARD_FAIL)`, and set `TrustConfig.revocation(...)` for the validator.
+
+### Signing
+
+```java
+// Known certificate first (client-side PAdES / CMS): certificate choice → the signer
+NotificationSession cc = eid.sign().certificateChoiceByEtsi("УБ12345678", null);
+SessionResult ccr = eid.session().waitForResult(cc.sessionId(), WaitOptions.builder().expiresAt(cc.expiresAt()).build());
+Signer signer = eid.validator().validateCertificateChoice(ccr, cc.sessionId());
+
+// The digest (e.g. EidPades.prepare(...).dtbs()) — signed with PIN2 on the phone
+String dtbsB64 = Base64.getEncoder().encodeToString(prepared.dtbs());
+NotificationSession s = eid.sign().digestForSigner(signer.ref(), dtbsB64, ix, null);
+SessionResult sr = eid.session().waitForResult(s.sessionId(), WaitOptions.builder().expiresAt(s.expiresAt()).build());
+VerifiedSignature sig = eid.validator().validateSign(sr, dtbsB64, HashAlgorithm.SHA_256);
+```
+
+Also `digestByEtsi`, `digestByDocument`, `textByEtsi`, `deviceLinkByEtsi` / `deviceLinkByDocument` /
+`deviceLinkForSigner` (QR / Web2App), `certificateChoiceDeviceLink`; `SignOptions` (certificateLevel, hash /
+signature algorithm, `onBehalfOf`, callbackUrl, fileName).
+
+### PDF signature registration
+
+```java
+Completed done = EidPades.complete(prepared.state(), Base64.getDecoder().decode(sig.signatureValueB64()));
+PdfSignatureRegistered reg = eid.pdf().registerSignature(done.registration(s.sessionId(), null));
+// reg.docId(), reg.revIndex() (1…16), reg.verifyUrl(), reg.created() (false = an idempotent repeat)
+```
+
+`POST /pdf/signatures`; on 409 `PRIOR_MISMATCH` the prior-signature combinations are retried as Go / TS do. Invalid
+input (no docID / cms, revIndex outside 1…16, phone without sessionID …) throws `IllegalArgumentException` before any
+request.
+
+### Organisation, person, e-Seal, token, share
+
+- `organization()`: `getRepresentations(personEtsi)`, `sealGrants(personEtsi)`.
+- `person()` (PKI_READ): `certificates`, `devices`, `activity(etsi, ActivityQuery)`, `summary`, `children`.
+- `seal()`: `certificate`, `requestCertificate`, `certificateRequest`, `waitForCertificate`, `requestGrant`,
+  `grantStatus`, `waitForGrant`, `seal(orgEtsi, digest, hash)` — the returned ECDSA signature is verified against the
+  e-Seal certificate; `isSealCertificate`.
+- `token()`: `issueCertificate`, `previewCertificate`, `certificateResult`, `certificateInfo`, `authChallenge`,
+  `authVerify` (r‖s signature and certificate checked by the validator's chain before anything is sent), static
+  `verifyTokenCertificates`, `tokenAuthDigest`, `tokenLimitOf`.
+- `share(ShareRequest)` (multipart e-mail of a signed file; the CA does not keep it) and `shareInfo()`.
+- Path parameters (ETSI / session / request ids) that are empty, `.` or `..` are rejected before any request.
+
+### My QR client
+
+```java
+EidQr.Parsed p = eid.qr().parse(scanned);                           // QR_FORMAT_INVALID → do not send it
+QrSession qs = eid.qr().start(new QrStartRequest(p.qr()));            // POST /authentication/qr
+EidQr.Result r = eid.qr().result(qs, WaitOptions.builder().maxWait(Duration.ofMinutes(2)).build());  // PIN2 on the phone
+// r.data(), r.signer().etsi(), r.photo() … — verified by EidQr.verify (see «My QR» above)
+```
+
+`check(qs, serverPoll)` is one long-poll step; `verify(jws, qs)` verifies a JWS you already hold.
+`EidClient.Builder.qrTrust` / `qrIssuer` override the trust and issuer.
+
+### Sealing a PDF (`EidPades.sealPdf`)
+
+```java
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().invisible(true).build());
+```
+
+**Invisible seals only in this release**: the visible seal stamp and the QR stamp are pending the PAdES engine's golden
+v12 / v13 catch-up; `invisible(false)` (the default) throws `REQUEST_INVALID` without any network call.
+
+### «Sign in with eID» button backend (`mn.eidmongolia.eid.login`)
+
+The backend of the browser `<eid-login-button>` (TS SDK) — the same JSON, cookie and status codes as Go `eidlogin` / TS `createEidLogin` (all 24 scenarios of the `eidlogin/1` conformance corpus). `EidLogin.handle(EidLoginRequest)` is framework neutral; `EidLoginHttpHandler` for the JDK server, the snippets below for Servlet / Spring. A push never reveals whether a number is registered (decoy, 1 s floor); the cookie is HttpOnly + Secure + SameSite=Lax; the state stays on the server (`EidLoginStore`, memory by default); OCSP revocation on by default (soft-fail — see above).
 
 ```java
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: TrustConfig with the national root)
@@ -275,6 +394,40 @@ EidLogin login = EidLogin.builder(eid)
 The per-ID push limit (3 per minute per number) is keyed by the number alone: anyone who knows a citizen's ID number can
 use up its window and delay that citizen's **push** sign-in for up to a minute — inherent to push-by-ID; QR and Web2App
 are unaffected.
+
+### Support matrix (vs the Go / TypeScript SDKs)
+
+| Capability | Java 0.2.0 |
+|---|---|
+| Client, mTLS, errors, route table checked daily against live discovery | ✓ |
+| Auth push / device link, QR ticker, ACSP_V2, interactions | ✓ |
+| Session poll / waitForResult | ✓ |
+| Sign (push, device link, linked, text), certificate choice | ✓ |
+| Validator (auth, sign, certificate choice), roots, OCSP checker, subject | ✓ |
+| PDF signature registration (`POST /pdf/signatures`) | ✓ |
+| Organisation, person (PKI_READ), e-Seal (certificate, grants, seal digest), token, share | ✓ |
+| My QR parse / verify / start / result / check | ✓ |
+| Sign-in button backend (JDK adapter; Servlet / Spring snippets) | ✓ |
+| PAdES prepare / complete / suggestPlacement / registration body | ✓ |
+| `sealPdf` | invisible only — the visible / QR seal stamp is pending the golden v12 / v13 catch-up |
+| ValidatePDF (verify a signed PDF) | not yet |
+| Seal registration (`POST /v3/seal/{org}/registrations`) | not yet (in no SDK yet) |
+
+### Migrating from 0.1.x
+
+- Coordinates, the jar's `Automatic-Module-Name` (`mn.eidmongolia.eid.pades` — kept for compatibility, although the jar
+  now also carries `mn.eidmongolia.eid`, `.login` and `.internal`) and the public API of `mn.eidmongolia.eid.pades` are
+  unchanged: 0.2.0 only adds (`EidPades.sealPdf`, `Sealer`, `SealOptions`, `EidQrException.TOKEN_INVALID` /
+  `PENDING` / `PRESENTATION_GONE` and a constructor with a cause). Code built against 0.1.1 compiles and links
+  unchanged (the only caveat is the usual one for additions: the new type names `Sealer` / `SealOptions` can clash with
+  another library's type of the same name under two wildcard imports).
+- `mn.eidmongolia.eid.internal` is public only for the SDK's own packages — not an API; it may change in any release.
+- Behaviour changes (stricter, security): My QR treats an OCSP `unknown` answer as revoked (`QR_CERT_REVOKED`, was
+  `QR_REVOCATION_UNKNOWN`) and accepts OCSP answers up to 48 h old (was 24 h); certificates must be strict DER (see the
+  0.2.0 security notes in [CHANGELOG.md](CHANGELOG.md)); SHA-1 chain signatures and RSA keys under 2048 bits are
+  rejected; the OCSP CertID must match the issuer; a certificate subject with duplicate SERIALNUMBER / CN is rejected.
+- If you called the RP-API yourself over HTTPS/JSON, you can move to `EidClient` piece by piece — the wire format is the
+  same.
 
 ## Development
 

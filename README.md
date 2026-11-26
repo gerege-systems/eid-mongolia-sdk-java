@@ -13,13 +13,12 @@
 Бүрэн баримт: <https://developer.eidmongolia.mn/#overview>.
 
 - Java 17+, **runtime хамааралгүй** — `java.security` + жижиг DER writer (BouncyCastle, Jackson, Kotlin үгүй).
-- Thread-safe, глобал төлөвгүй. Сүлжээ зөвхөн `complete`-д (TSA, OCSP/CRL) ба `EidQr.verify`-ийн анхдагч OCSP-д.
-- **RP-API клиент хараахан бүрэн биш** (`mn.eidmongolia.eid` — хийгдэж байна, доор). Иргэний сесс эхлүүлэх, `RAW_DIGEST_SIGNATURE` гарын үсэг авах, `POST /pdf/signatures`,
-  `POST /authentication/qr` зэргийг RP-API-г шууд HTTPS/JSON-оор дуудна —
-  [RP-API баримт](https://developer.eidmongolia.mn/#overview). Энэ сан зөвхөн PDF бэлдэх/суулгах, бүртгэлийн биеийг
-  угсрах, «Миний QR»-ийг задлах/шалгах ажлыг хийнэ.
-- Бүрэн шалгагч (validator) **байхгүй** — шалгалт: файлын SHA-256-аар CA-ийн бүртгэлээс, бүрэн криптограф шалгалт Go
-  backend SDK-д.
+- Thread-safe, глобал төлөвгүй. PAdES сүлжээг зөвхөн `complete`-д (TSA, OCSP/CRL) ба `EidQr.verify`-ийн анхдагч OCSP-д ашиглана.
+- **Бүрэн RP-API клиент** (`mn.eidmongolia.eid`, 0.2.0-оос): нэвтрэлт, гарын үсэг, session, OCSP цуцлалттай хариуны
+  validator, PDF гарын үсгийн бүртгэл, байгууллага / иргэн / e-Seal / токен / share, «Миний QR» клиент ба «eID-ээр нэвтрэх»
+  товчны backend — Go ба TypeScript SDK-тэй ижил хүрээ (доорх дэмжлэгийн хүснэгт).
+- Хараахан үгүй: гарын үсэгтэй PDF шалгах (ValidatePDF) — файлын SHA-256-аар CA-ийн бүртгэлээс шалга, эсвэл Go / TS SDK.
+
 
 Бусад SDK: [Go](https://github.com/gerege-systems/eid-mongolia-sdk-go) ·
 [.NET](https://github.com/gerege-systems/eid-mongolia-sdk-dotnet) ·
@@ -40,7 +39,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.1.1")
+    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.2.0")
 }
 ```
 
@@ -53,7 +52,7 @@ Maven:
 <dependency>
   <groupId>com.github.gerege-systems</groupId>
   <artifactId>eid-mongolia-sdk-java</artifactId>
-  <version>0.1.1</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
@@ -168,36 +167,156 @@ revocationSoftFail)` — null бол шигтгэсэн үндэсний root + 
 `QR_SESSION_MISMATCH`, `QR_NONCE_MISMATCH`, `QR_NOT_YET_VALID`, `QR_EXPIRED`, `QR_DATA_INVALID`. RP-API-ийн HTTP алдаа
 (`QR_TOKEN_INVALID`, `QR_PRESENTATION_GONE` …) таны HTTP клиентэд ирнэ.
 
-## RP-API клиент (`mn.eidmongolia.eid`) — хийгдэж байна
+## RP-API клиент (`mn.eidmongolia.eid`)
 
-> **Хийгдэж байна (in progress).** Go / TS SDK-тэй ижил хүрээтэй RP-API клиентийг энэ artifact-д (координат өөрчлөгдөхгүй)
-> үе шаттай нэмж байна. Одоо байгаа: тохиргоо, transport, алдаа, замын хүснэгт, wire төрлүүд, discovery-ийн `sessionTtl`,
-> крипто туслахууд. Auth / Sign / Session / Validator дараагийн хувилбаруудад — тэр хүртэл RP-API-г шууд HTTPS/JSON-оор дуудна.
+Бүрэн relying-party SDK — Go ба TypeScript SDK-тэй ижил хүрээ, ижил wire зан төлөв (cross-SDK conformance корпус
+`rp-conformance/1`: wire, validator, OCSP, ACSP, interactions; нэвтрэх товчны backend-д `eidlogin/1`). Бүх дуудлага
+блоклоно (virtual thread-д тохиромжтой); `Thread.interrupt()` явж буй дуудлагыг цуцална (`EidException.Network#cancelled`).
+
+### Клиент, trust ба mTLS
 
 ```java
+TrustConfig trust = TrustConfig.builder()
+    .trustAnchorsPem(Roots.NATIONAL_ROOT_CA_PEM)          // шигтгэсэн үндэсний root (01); 02–04 дотроо бий
+    .revocation(OcspRevocationChecker.create())           // checkRevocation-ийн OCSP (өгөхгүй бол унтраалттай)
+    .revocationMode(RevocationMode.HARD_FAIL)             // checker өгсөн үеийн validator-ийн анхдагч
+    .build();
 EidClient eid = EidClient.builder(new Credentials(rpUuid, "Интернэт банк", apiSecret))
-    .transport(JdkHttpTransport.create(sslContext))   // mTLS бол; анхдагч JdkHttpTransport.create()
-    .language("mn")                                   // Accept-Language
-    .build();                                         // baseUrl анхдагч https://rp.eidmongolia.mn
-SessionTtl ttl = eid.auth().sessionTtl();             // discovery: auth / sign session-ий амьдрах хугацаа
-
-String link = DeviceLink.build(session.linkInput(DeviceLinkType.QR, "mon").build());  // authCode = HMAC-SHA256
-String interactions = EidCrypto.interactionsToBase64(List.of(Interaction.displayTextAndPin("Нэвтрэх")));
-byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                          // ACSP_V2
+    .trust(trust)
+    .transport(JdkHttpTransport.create(sslContext))      // mTLS: клиент гэрчилгээ SSLContext-д; анхдагч create()
+    .language("mn")                                      // Accept-Language
+    .build();                                            // baseUrl анхдагч https://rp.eidmongolia.mn
+SessionTtl ttl = eid.auth().sessionTtl();                // discovery: auth / sign session-ий амьдрах хугацаа
 ```
 
 - `baseUrl`: зөвхөн https (http нь зөвхөн localhost / loopback), хуучин `ca.eidmongolia.mn` хост тодорхой алдаа; Bearer
-  API secret; дуудлага бүрд нийт deadline (анхдагч 15 с, PDF 80 с); JSON хариу ≤ 4 MiB; redirect дагахгүй.
-- Блоклох дуудлага (virtual thread-д тохиромжтой); `Thread.interrupt()` дуудлагыг цуцална (`EidException.Network#cancelled`).
+  API secret; дуудлага бүрд нийт deadline (анхдагч 15 с, PDF бүртгэл 80 с); JSON хариу ≤ 4 MiB; redirect дагахгүй.
 - Алдаа: `EidException` (unchecked) — `Authentication` (401), `Forbidden` (403), `Api` ба код тус бүрийн дэд анги
-  (`NoSigningCertificate`, `SealServiceDisabled` …), `Network`, `ResponseTooLarge`, `SessionFailed`, `Validation`,
-  `DeviceLink`; бүгдэд `code()`, `status()`, `retryAfter()`, `retryable()`. Мессеж/`op`-д иргэний дугаар орохгүй.
-- Шалгалт: CA-ийн `devicelink_golden.json` (засваргүй хуулбар, SHA-256 бэхэлсэн), Smart-ID ACSP_V2 вектор, interactions-ийн
-  `JSON.stringify` байт-ижил тохиолдлууд; `contract.yml` замын хүснэгтийг live `/.well-known/eid`-тэй өдөр бүр тулгана.
+  (`NoSigningCertificate`, `SealServiceDisabled` …), `Network`, `ResponseTooLarge`, `SessionFailed`, `Validation`
+  (`reason()` = корпусын тогтвортой түлхүүр, ж: `chain.untrusted`), `Ocsp`, `DeviceLink`; бүгдэд `code()`, `status()`,
+  `retryAfter()`, `retryable()`. Мессежид иргэний дугаар орохгүй. Автомат давталт үгүй (Go / TS шиг).
+
+### Нэвтрэлт: push ба QR
+
+```java
+List<Interaction> ix = List.of(Interaction.displayTextAndPin("Интернэт банкинд нэвтрэх"));
+
+// Иргэний утас руу push (регистр, иргэний дугаар эсвэл ETSI PNOMN-…)
+NotificationSession push = eid.auth().notificationByEtsi("УБ12345678", ix, null);
+show(push.vc());                                          // иргэний тулгах баталгаажуулах код
+
+// Таны хуудсан дээрх QR (anonymous device link): секунд тутам шинэ QR холбоос
+DeviceLinkSession qr = eid.auth().deviceLinkAnonymous(ix, null);
+Thread ticker = new Thread(() -> {
+    try {
+        DeviceLink.tickQr(qr.linkInput(DeviceLinkType.QR, "mon").build(), Duration.ofSeconds(1), link -> render(link));
+    } catch (InterruptedException e) { /* зогссон */ }
+});
+ticker.start();
+
+// Session: үр дүнг хүлээгээд шалгана (гинж + ACSP_V2 гарын үсэг + урсгалын төрөл)
+SessionResult res = eid.session().waitForResult(qr.sessionId(), WaitOptions.builder().expiresAt(qr.expiresAt()).build());
+ticker.interrupt();
+VerifiedIdentity id = eid.validator().validateAuth(res, qr.acsp(),
+    ValidateAuthOptions.builder().expectedFlowType(FlowType.QR).build());
+eid.validator().checkRevocation(id.certificate());       // OCSP (TrustConfig.revocation)
+String etsi = id.subject().serialNumber();                // PNOMN-…
+```
+
+`session().poll(sessionId, serverPoll)` нь нэг long-poll; `waitForResult` COMPLETE эсвэл хугацаа дуустал давтана
+(`maxWait` → `expiresAt` → discovery `sessionTtl` → 600 с, + 15 с). Web2App / App2App: `AuthOptions`-д `callbackUrl` өгч,
+callback-ийн `userChallengeVerifier`-ийг `ValidateAuthOptions`-д дамжуул (эдгээр урсгалд заавал).
+
+### Validator ба цуцлалт
+
+`client.validator()` = `ResponseValidator`: `validateAuth` (ACSP_V2: урсгалын relay хаалт, userChallengeVerifier,
+callback дүрэм, алгоритм / hash downgrade хаалт, гарын үсэг), `validateSign` (RAW_DIGEST: prehashed RSASSA-PSS,
+PKCS#1 v1.5, ECDSA P-256), `validateCertificateChoice` → `Signer`. Гинжийг детерминист, гараар бичсэн угсрагч (PKIX
+биш) барина: шигтгэсэн root, олгогчийн SKI allowlist, цагийн зөрүү, pathLen, KeyUsage / EKU, name constraints ба үл
+таних critical extension-д fail-closed, гинжийн гарын үсэг зөвхөн SHA-2, RSA ≥ 2048, subject-д SERIALNUMBER эсвэл CN
+нэгээс олон бол татгалзана (`subject.duplicate_identity`).
+
+Цуцлалт (`OcspRevocationChecker`: OCSP `unknown` = цуцлагдсан, thisUpdate 48 ц дотор, кэш ≤ 5 мин, хүсэлт 2 с / нийт
+3 с, CertID олгогчтой холбогдсон):
+
+| Хаана | Анхдагч | OCSP хариугүй үед |
+|---|---|---|
+| `validator().checkRevocation` | `TrustConfig.revocation(...)` өгөх хүртэл **унтраалттай** | `HARD_FAIL` (өгсөн үеийн анхдагч) → `EidException.Validation`; `SOFT_FAIL` → `UNCHECKED`-ээр зөвшөөрнө |
+| Нэвтрэх товчны backend (`EidLogin`) | OCSP **асаалттай**, **soft-fail** | зөвшөөрч log бичнэ, `identity.revocation() == UNCHECKED` |
+| «Миний QR» (`EidQr.verify`, `client.qr()`) | OCSP асаалттай, hard-fail | `QR_REVOCATION_UNKNOWN` |
+
+Нэвтрэх backend анхдагчаар **soft-fail** (OCSP тасарвал бүх хүн түгжигдэхгүй). **Өндөр үнэ цэнтэй RP (банк, нотариат,
+мөнгө эсвэл хуулийн үр дагавартай бүх зүйл) hard-fail хэрэглэх нь зүйтэй**: `EidLogin.builder(eid)
+.revocationMode(RevocationMode.HARD_FAIL)`, validator-т `TrustConfig.revocation(...)`.
+
+### Гарын үсэг
+
+```java
+// Эхлээд гэрчилгээг мэдэх (client-side PAdES / CMS): гэрчилгээ сонголт → гарын үсэг зурагч
+NotificationSession cc = eid.sign().certificateChoiceByEtsi("УБ12345678", null);
+SessionResult ccr = eid.session().waitForResult(cc.sessionId(), WaitOptions.builder().expiresAt(cc.expiresAt()).build());
+Signer signer = eid.validator().validateCertificateChoice(ccr, cc.sessionId());
+
+// Digest (ж: EidPades.prepare(...).dtbs()) — утсан дээр PIN2-оор зурна
+String dtbsB64 = Base64.getEncoder().encodeToString(prepared.dtbs());
+NotificationSession s = eid.sign().digestForSigner(signer.ref(), dtbsB64, ix, null);
+SessionResult sr = eid.session().waitForResult(s.sessionId(), WaitOptions.builder().expiresAt(s.expiresAt()).build());
+VerifiedSignature sig = eid.validator().validateSign(sr, dtbsB64, HashAlgorithm.SHA_256);
+```
+
+Мөн `digestByEtsi`, `digestByDocument`, `textByEtsi`, `deviceLinkByEtsi` / `deviceLinkByDocument` /
+`deviceLinkForSigner` (QR / Web2App), `certificateChoiceDeviceLink`; `SignOptions` (certificateLevel, hash /
+гарын үсгийн алгоритм, `onBehalfOf`, callbackUrl, fileName).
+
+### PDF гарын үсгийн бүртгэл
+
+```java
+Completed done = EidPades.complete(prepared.state(), Base64.getDecoder().decode(sig.signatureValueB64()));
+PdfSignatureRegistered reg = eid.pdf().registerSignature(done.registration(s.sessionId(), null));
+// reg.docId(), reg.revIndex() (1…16), reg.verifyUrl(), reg.created() (false = idempotent давталт)
+```
+
+`POST /pdf/signatures`; 409 `PRIOR_MISMATCH` үед өмнөх гарын үсгийн хослолуудыг Go / TS шиг дахин оролдоно. Буруу
+оролт (docID / cms алга, revIndex 1…16-аас гадуур, утсанд sessionID алга …) ямар ч хүсэлтээс өмнө
+`IllegalArgumentException`.
+
+### Байгууллага, иргэн, e-Seal, токен, share
+
+- `organization()`: `getRepresentations(personEtsi)`, `sealGrants(personEtsi)`.
+- `person()` (PKI_READ): `certificates`, `devices`, `activity(etsi, ActivityQuery)`, `summary`, `children`.
+- `seal()`: `certificate`, `requestCertificate`, `certificateRequest`, `waitForCertificate`, `requestGrant`,
+  `grantStatus`, `waitForGrant`, `seal(orgEtsi, digest, hash)` — буцсан ECDSA гарын үсгийг e-Seal гэрчилгээгээр
+  шалгана; `isSealCertificate`.
+- `token()`: `issueCertificate`, `previewCertificate`, `certificateResult`, `certificateInfo`, `authChallenge`,
+  `authVerify` (r‖s гарын үсэг ба гэрчилгээг илгээхээс өмнө validator-ийн гинжээр шалгана), static
+  `verifyTokenCertificates`, `tokenAuthDigest`, `tokenLimitOf`.
+- `share(ShareRequest)` (гарын үсэгтэй файлыг multipart имэйлээр; CA хадгалахгүй) ба `shareInfo()`.
+- Замын параметр (ETSI / session / request id) хоосон, `.` эсвэл `..` бол ямар ч хүсэлтээс өмнө татгалзана.
+
+### «Миний QR» клиент
+
+```java
+EidQr.Parsed p = eid.qr().parse(scanned);                           // QR_FORMAT_INVALID → бүү илгээ
+QrSession qs = eid.qr().start(new QrStartRequest(p.qr()));            // POST /authentication/qr
+EidQr.Result r = eid.qr().result(qs, WaitOptions.builder().maxWait(Duration.ofMinutes(2)).build());  // утсан дээр PIN2
+// r.data(), r.signer().etsi(), r.photo() … — EidQr.verify-ээр шалгагдсан (дээрх «Миний QR»)
+```
+
+`check(qs, serverPoll)` нь нэг long-poll алхам; `verify(jws, qs)` гарт байгаа JWS-ийг шалгана.
+`EidClient.Builder.qrTrust` / `qrIssuer` trust ба олгогчийг солино.
+
+### PDF-д тамга дарах (`EidPades.sealPdf`)
+
+```java
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().invisible(true).build());
+```
+
+**Энэ хувилбарт зөвхөн үл харагдах тамга**: харагдах тамганы дардас ба QR-тэй тамга PAdES хөдөлгүүрийн golden v12 / v13-д
+хүрэхийг хүлээж байна; `invisible(false)` (анхдагч) сүлжээгүйгээр `REQUEST_INVALID`.
 
 ### «eID-ээр нэвтрэх» товчны backend (`mn.eidmongolia.eid.login`)
 
-Хөтчийн `<eid-login-button>` (TS SDK) ашигладаг backend — Go `eidlogin` / TS `createEidLogin`-тэй ижил JSON, cookie, статус код (conformance `eidlogin/1`-ийн 24 сценари). `EidLogin.handle(EidLoginRequest)` нь framework-аас хамааралгүй; JDK серверт `EidLoginHttpHandler`, Servlet / Spring-д доорх жишээ. Push нь бүртгэлтэй эсэхийг задлахгүй (decoy, 1 с доод хугацаа), cookie нь HttpOnly + Secure + SameSite=Lax, төлөв серверт (`EidLoginStore`, анхдагч санах ой), OCSP цуцлалт анхдагчаар (soft-fail).
+Хөтчийн `<eid-login-button>` (TS SDK) ашигладаг backend — Go `eidlogin` / TS `createEidLogin`-тэй ижил JSON, cookie, статус код (conformance `eidlogin/1`-ийн 24 сценари). `EidLogin.handle(EidLoginRequest)` нь framework-аас хамааралгүй; JDK серверт `EidLoginHttpHandler`, Servlet / Spring-д доорх жишээ. Push нь бүртгэлтэй эсэхийг задлахгүй (decoy, 1 с доод хугацаа), cookie нь HttpOnly + Secure + SameSite=Lax, төлөв серверт (`EidLoginStore`, анхдагч санах ой), OCSP цуцлалт анхдагчаар (soft-fail — дээрхийг үз).
 
 ```java
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient (trust: үндэсний root-тэй TrustConfig)
@@ -273,6 +392,39 @@ EidLogin login = EidLogin.builder(eid)
 Дугаар тутмын push хязгаар (дугаарт минутад 3) зөвхөн дугаараар түлхүүрлэгдэнэ: иргэний регистрийн дугаарыг мэдсэн хэн ч
 цонхыг дуусгаж тэр иргэний **push** нэвтрэлтийг минут хүртэл хойшлуулж чадна — дугаараар push хийхийн мөн чанар; QR ба
 Web2App-д нөлөөлөхгүй.
+
+### Дэмжлэгийн хүснэгт (Go / TypeScript SDK-тэй харьцуулбал)
+
+| Боломж | Java 0.2.0 |
+|---|---|
+| Клиент, mTLS, алдаа, live discovery-тэй өдөр бүр тулгадаг замын хүснэгт | ✓ |
+| Auth push / device link, QR ticker, ACSP_V2, interactions | ✓ |
+| Session poll / waitForResult | ✓ |
+| Гарын үсэг (push, device link, linked, text), гэрчилгээ сонголт | ✓ |
+| Validator (auth, sign, гэрчилгээ сонголт), root, OCSP шалгагч, subject | ✓ |
+| PDF гарын үсгийн бүртгэл (`POST /pdf/signatures`) | ✓ |
+| Байгууллага, иргэн (PKI_READ), e-Seal (гэрчилгээ, grant, digest-д тамга), токен, share | ✓ |
+| «Миний QR» parse / verify / start / result / check | ✓ |
+| Нэвтрэх товчны backend (JDK adapter; Servlet / Spring жишээ) | ✓ |
+| PAdES prepare / complete / suggestPlacement / бүртгэлийн бие | ✓ |
+| `sealPdf` | зөвхөн үл харагдах — харагдах / QR-тэй тамга golden v12 / v13-ыг хүлээж байна |
+| ValidatePDF (гарын үсэгтэй PDF шалгах) | хараахан үгүй |
+| Тамганы бүртгэл (`POST /v3/seal/{org}/registrations`) | хараахан үгүй (ямар ч SDK-д алга) |
+
+### 0.1.x-ээс шилжих
+
+- Координат, jar-ын `Automatic-Module-Name` (`mn.eidmongolia.eid.pades` — нийцлийн тулд хэвээр, jar одоо
+  `mn.eidmongolia.eid`, `.login`, `.internal`-ийг ч агуулна) ба `mn.eidmongolia.eid.pades`-ийн нийтийн API
+  өөрчлөгдөөгүй: 0.2.0 зөвхөн нэмнэ (`EidPades.sealPdf`, `Sealer`, `SealOptions`, `EidQrException.TOKEN_INVALID` /
+  `PENDING` / `PRESENTATION_GONE` ба cause-тай constructor). 0.1.1-ээр бичсэн код өөрчлөлтгүй compile, link хийгдэнэ
+  (нэмэлтийн ердийн нэг сануулга: шинэ `Sealer` / `SealOptions` нэр хоёр wildcard import-ын дор өөр сангийн ижил нэртэй
+  төрөлтэй давхцаж болно).
+- `mn.eidmongolia.eid.internal` нь зөвхөн SDK-ийн өөрийн багцуудад нийтийн — API биш; ямар ч хувилбарт өөрчлөгдөж болно.
+- Зан төлөвийн өөрчлөлт (илүү хатуу, аюулгүй байдал): «Миний QR» OCSP `unknown`-ийг цуцлагдсан гэж үзнэ
+  (`QR_CERT_REVOKED`, өмнө нь `QR_REVOCATION_UNKNOWN`), 48 ц хүртэлх OCSP хариуг хүлээн авна (өмнө нь 24 ц); гэрчилгээ
+  хатуу DER байх ёстой ([CHANGELOG.md](CHANGELOG.md)-ийн 0.2.0 аюулгүйн тэмдэглэл); SHA-1 гинжийн гарын үсэг ба 2048-аас
+  бага RSA түлхүүр татгалзана; OCSP CertID олгогчтой таарах ёстой; subject-д SERIALNUMBER / CN давхардвал татгалзана.
+- RP-API-г өөрөө HTTPS/JSON-оор дуудаж байсан бол `EidClient` руу хэсэг хэсгээр шилжиж болно — wire формат ижил.
 
 ## Хөгжүүлэлт
 

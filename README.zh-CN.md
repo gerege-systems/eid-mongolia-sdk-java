@@ -13,13 +13,12 @@
 完整文档：<https://developer.eidmongolia.mn/#overview>。
 
 - Java 17+，**无运行时依赖**——`java.security` + 一个小型 DER writer（不使用 BouncyCastle、Jackson、Kotlin）。
-- 线程安全，无全局状态。仅在 `complete`（TSA、OCSP/CRL）以及 `EidQr.verify` 的默认 OCSP 中使用网络。
-- **RP-API 客户端尚未完成**（`mn.eidmongolia.eid`——开发中，见下文）。发起公民 session、获取 `RAW_DIGEST_SIGNATURE` 签名、`POST /pdf/signatures`、
-  `POST /authentication/qr` 等，都需直接通过 HTTPS/JSON 调用 RP-API——
-  [RP-API 文档](https://developer.eidmongolia.mn/#overview)。本库只负责准备/嵌入 PDF、组装登记请求体，
-  以及解析/验证“我的 QR”。
-- **没有**完整的验证器（validator）——验证：通过文件的 SHA-256 在 CA 的登记中查询；完整的密码学验证在 Go
-  后端 SDK 中。
+- 线程安全，无全局状态。PAdES 仅在 `complete`（TSA、OCSP/CRL）以及 `EidQr.verify` 的默认 OCSP 中使用网络。
+- **完整的 RP-API 客户端**（`mn.eidmongolia.eid`，自 0.2.0 起）：认证、签名、session、带 OCSP 吊销检查的响应验证器、
+  PDF 签名登记、组织 / 个人 / e-Seal / 令牌 / 分享、“我的 QR”客户端以及“使用 eID 登录”按钮后端——范围与 Go 和
+  TypeScript SDK 相同（见下文支持矩阵）。
+- 尚未支持：验证已签名的 PDF（ValidatePDF）——请通过文件的 SHA-256 在 CA 的登记中查询，或使用 Go / TS SDK。
+
 
 其他 SDK：[Go](https://github.com/gerege-systems/eid-mongolia-sdk-go) ·
 [.NET](https://github.com/gerege-systems/eid-mongolia-sdk-dotnet) ·
@@ -40,7 +39,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.1.1")
+    implementation("com.github.gerege-systems:eid-mongolia-sdk-java:0.2.0")
 }
 ```
 
@@ -53,7 +52,7 @@ Maven：
 <dependency>
   <groupId>com.github.gerege-systems</groupId>
   <artifactId>eid-mongolia-sdk-java</artifactId>
-  <version>0.1.1</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
@@ -168,36 +167,154 @@ revocationSoftFail)`——为 null 时使用内置的国家 root + 02–05、颁
 `QR_SESSION_MISMATCH`、`QR_NONCE_MISMATCH`、`QR_NOT_YET_VALID`、`QR_EXPIRED`、`QR_DATA_INVALID`。RP-API 的 HTTP 错误
 （`QR_TOKEN_INVALID`、`QR_PRESENTATION_GONE` ……）会出现在您的 HTTP 客户端中。
 
-## RP-API 客户端（`mn.eidmongolia.eid`）——开发中
+## RP-API 客户端（`mn.eidmongolia.eid`）
 
-> **开发中（in progress）。** 与 Go / TS SDK 范围相同的 RP-API 客户端正在分阶段加入本 artifact（坐标不变）。目前已有：
-> 配置、transport、错误、路由表、wire 类型、discovery `sessionTtl`、加密辅助函数。Auth / Sign / Session / Validator
-> 将在后续版本中提供——在此之前请直接通过 HTTPS/JSON 调用 RP-API。
+完整的依赖方（relying-party）SDK——范围与线上行为同 Go 和 TypeScript SDK（跨 SDK 一致性语料 `rp-conformance/1`：
+wire、validator、OCSP、ACSP、interactions；登录按钮后端为 `eidlogin/1`）。所有调用都是阻塞的（适合虚拟线程）；
+`Thread.interrupt()` 会取消正在进行的调用（`EidException.Network#cancelled`）。
+
+### 客户端、trust 与 mTLS
 
 ```java
+TrustConfig trust = TrustConfig.builder()
+    .trustAnchorsPem(Roots.NATIONAL_ROOT_CA_PEM)          // 内置国家根证书（01）；02–04 已内置
+    .revocation(OcspRevocationChecker.create())           // checkRevocation 的 OCSP（不设置则关闭）
+    .revocationMode(RevocationMode.HARD_FAIL)             // 设置 checker 后 validator 的默认值
+    .build();
 EidClient eid = EidClient.builder(new Credentials(rpUuid, "Internet bank", apiSecret))
-    .transport(JdkHttpTransport.create(sslContext))   // mTLS 时；默认 JdkHttpTransport.create()
-    .language("en")                                   // Accept-Language
-    .build();                                         // baseUrl 默认 https://rp.eidmongolia.mn
-SessionTtl ttl = eid.auth().sessionTtl();             // discovery：auth / sign session 有效期
-
-String link = DeviceLink.build(session.linkInput(DeviceLinkType.QR, "eng").build());  // authCode = HMAC-SHA256
-String interactions = EidCrypto.interactionsToBase64(List.of(Interaction.displayTextAndPin("Log in")));
-byte[] digest = Acsp.v2Digest(params, HashAlgorithm.SHA_512);                          // ACSP_V2
+    .trust(trust)
+    .transport(JdkHttpTransport.create(sslContext))      // mTLS：客户端证书放在 SSLContext 中；默认 create()
+    .language("en")                                      // Accept-Language
+    .build();                                            // baseUrl 默认 https://rp.eidmongolia.mn
+SessionTtl ttl = eid.auth().sessionTtl();                // discovery：auth / sign session 有效期
 ```
 
 - `baseUrl`：仅 https（http 仅限 localhost / loopback），旧的 `ca.eidmongolia.mn` 主机会给出明确错误；Bearer API secret；
-  每次调用有总截止时间（默认 15 秒，PDF 80 秒）；JSON 响应 ≤ 4 MiB；不跟随重定向。
-- 阻塞调用（适合虚拟线程）；`Thread.interrupt()` 取消调用（`EidException.Network#cancelled`）。
+  每次调用有总截止时间（默认 15 秒，PDF 登记 80 秒）；JSON 响应 ≤ 4 MiB；不跟随重定向。
 - 错误：`EidException`（unchecked）——`Authentication`（401）、`Forbidden`（403）、`Api` 及按代码划分的子类
-  （`NoSigningCertificate`、`SealServiceDisabled` …）、`Network`、`ResponseTooLarge`、`SessionFailed`、`Validation`、
-  `DeviceLink`；均有 `code()`、`status()`、`retryAfter()`、`retryable()`。消息 / `op` 中不含公民身份号。
-- 验证：CA 的 `devicelink_golden.json`（未修改副本，固定 SHA-256）、Smart-ID ACSP_V2 向量、与 `JSON.stringify`
-  字节一致的 interactions 用例；`contract.yml` 每天将路由表与线上 `/.well-known/eid` 对照。
+  （`NoSigningCertificate`、`SealServiceDisabled` …）、`Network`、`ResponseTooLarge`、`SessionFailed`、`Validation`
+  （`reason()` = 语料中的稳定键，如 `chain.untrusted`）、`Ocsp`、`DeviceLink`；均有 `code()`、`status()`、
+  `retryAfter()`、`retryable()`。消息中不含公民身份号。不自动重试（同 Go / TS）。
+
+### 认证：推送与 QR
+
+```java
+List<Interaction> ix = List.of(Interaction.displayTextAndPin("Log in to Internet bank"));
+
+// 推送到公民手机（身份证号、公民号或 ETSI PNOMN-…）
+NotificationSession push = eid.auth().notificationByEtsi("УБ12345678", ix, null);
+show(push.vc());                                          // 公民核对的验证码
+
+// 在您的页面上显示 QR（anonymous device link）：每秒生成新的 QR 链接
+DeviceLinkSession qr = eid.auth().deviceLinkAnonymous(ix, null);
+Thread ticker = new Thread(() -> {
+    try {
+        DeviceLink.tickQr(qr.linkInput(DeviceLinkType.QR, "eng").build(), Duration.ofSeconds(1), link -> render(link));
+    } catch (InterruptedException e) { /* 已停止 */ }
+});
+ticker.start();
+
+// Session：等待结果后验证（证书链 + ACSP_V2 签名 + 流程类型）
+SessionResult res = eid.session().waitForResult(qr.sessionId(), WaitOptions.builder().expiresAt(qr.expiresAt()).build());
+ticker.interrupt();
+VerifiedIdentity id = eid.validator().validateAuth(res, qr.acsp(),
+    ValidateAuthOptions.builder().expectedFlowType(FlowType.QR).build());
+eid.validator().checkRevocation(id.certificate());       // OCSP（TrustConfig.revocation）
+String etsi = id.subject().serialNumber();                // PNOMN-…
+```
+
+`session().poll(sessionId, serverPoll)` 是单次长轮询；`waitForResult` 循环直到 COMPLETE 或超时
+（`maxWait` → `expiresAt` → discovery `sessionTtl` → 600 秒，+ 15 秒）。Web2App / App2App：在 `AuthOptions` 中传入
+`callbackUrl`，并把回调中的 `userChallengeVerifier` 传给 `ValidateAuthOptions`（这些流程中为必填）。
+
+### 验证器与吊销
+
+`client.validator()` = `ResponseValidator`：`validateAuth`（ACSP_V2：流程类型中继检查、userChallengeVerifier、回调规则、
+算法 / hash 降级检查、签名）、`validateSign`（RAW_DIGEST：prehashed RSASSA-PSS、PKCS#1 v1.5、ECDSA P-256）、
+`validateCertificateChoice` → `Signer`。证书链由确定性的手写路径构建器构建（非 PKIX）：内置根证书、签发者 SKI 白名单、
+时钟偏差、pathLen、KeyUsage / EKU，对 name constraints 与未知关键扩展 fail-closed，链签名仅限 SHA-2，RSA ≥ 2048，
+subject 中 SERIALNUMBER 或 CN 多于一个时拒绝（`subject.duplicate_identity`）。
+
+吊销（`OcspRevocationChecker`：OCSP `unknown` = 已吊销，thisUpdate 在 48 小时内，缓存 ≤ 5 分钟，每次请求 2 秒 / 总计
+3 秒，CertID 与签发者绑定）：
+
+| 位置 | 默认 | 没有 OCSP 应答时 |
+|---|---|---|
+| `validator().checkRevocation` | 在设置 `TrustConfig.revocation(...)` 之前**关闭** | `HARD_FAIL`（设置后的默认）→ `EidException.Validation`；`SOFT_FAIL` → 以 `UNCHECKED` 接受 |
+| 登录按钮后端（`EidLogin`） | OCSP **开启**，**soft-fail** | 接受并记录日志，`identity.revocation() == UNCHECKED` |
+| 我的 QR（`EidQr.verify`、`client.qr()`） | OCSP 开启，hard-fail | `QR_REVOCATION_UNKNOWN` |
+
+登录后端默认为 **soft-fail**（OCSP 故障时不会把所有人挡在外面）。**高价值的依赖方（银行、公证，任何涉及资金或法律效力的
+场景）应使用 hard-fail**：`EidLogin.builder(eid).revocationMode(RevocationMode.HARD_FAIL)`，并为 validator 设置
+`TrustConfig.revocation(...)`。
+
+### 签名
+
+```java
+// 先确定证书（client-side PAdES / CMS）：证书选择 → 签名人
+NotificationSession cc = eid.sign().certificateChoiceByEtsi("УБ12345678", null);
+SessionResult ccr = eid.session().waitForResult(cc.sessionId(), WaitOptions.builder().expiresAt(cc.expiresAt()).build());
+Signer signer = eid.validator().validateCertificateChoice(ccr, cc.sessionId());
+
+// 摘要（如 EidPades.prepare(...).dtbs()）——在手机上用 PIN2 签名
+String dtbsB64 = Base64.getEncoder().encodeToString(prepared.dtbs());
+NotificationSession s = eid.sign().digestForSigner(signer.ref(), dtbsB64, ix, null);
+SessionResult sr = eid.session().waitForResult(s.sessionId(), WaitOptions.builder().expiresAt(s.expiresAt()).build());
+VerifiedSignature sig = eid.validator().validateSign(sr, dtbsB64, HashAlgorithm.SHA_256);
+```
+
+另有 `digestByEtsi`、`digestByDocument`、`textByEtsi`、`deviceLinkByEtsi` / `deviceLinkByDocument` /
+`deviceLinkForSigner`（QR / Web2App）、`certificateChoiceDeviceLink`；`SignOptions`（certificateLevel、hash / 签名算法、
+`onBehalfOf`、callbackUrl、fileName）。
+
+### PDF 签名登记
+
+```java
+Completed done = EidPades.complete(prepared.state(), Base64.getDecoder().decode(sig.signatureValueB64()));
+PdfSignatureRegistered reg = eid.pdf().registerSignature(done.registration(s.sessionId(), null));
+// reg.docId()、reg.revIndex()（1…16）、reg.verifyUrl()、reg.created()（false = 幂等重复）
+```
+
+`POST /pdf/signatures`；遇到 409 `PRIOR_MISMATCH` 时按 Go / TS 的方式重试先前签名的组合。无效输入（缺少 docID / cms、
+revIndex 不在 1…16、手机签名缺少 sessionID …）会在发出任何请求之前抛出 `IllegalArgumentException`。
+
+### 组织、个人、e-Seal、令牌、分享
+
+- `organization()`：`getRepresentations(personEtsi)`、`sealGrants(personEtsi)`。
+- `person()`（PKI_READ）：`certificates`、`devices`、`activity(etsi, ActivityQuery)`、`summary`、`children`。
+- `seal()`：`certificate`、`requestCertificate`、`certificateRequest`、`waitForCertificate`、`requestGrant`、
+  `grantStatus`、`waitForGrant`、`seal(orgEtsi, digest, hash)`——用 e-Seal 证书验证返回的 ECDSA 签名；
+  `isSealCertificate`。
+- `token()`：`issueCertificate`、`previewCertificate`、`certificateResult`、`certificateInfo`、`authChallenge`、
+  `authVerify`（发送前用 validator 的证书链检查 r‖s 签名与证书），静态方法 `verifyTokenCertificates`、
+  `tokenAuthDigest`、`tokenLimitOf`。
+- `share(ShareRequest)`（以 multipart 邮件发送已签名文件；CA 不保存）与 `shareInfo()`。
+- 路径参数（ETSI / session / request id）为空、`.` 或 `..` 时在发出任何请求之前即被拒绝。
+
+### 我的 QR 客户端
+
+```java
+EidQr.Parsed p = eid.qr().parse(scanned);                           // QR_FORMAT_INVALID → 不要发送
+QrSession qs = eid.qr().start(new QrStartRequest(p.qr()));            // POST /authentication/qr
+EidQr.Result r = eid.qr().result(qs, WaitOptions.builder().maxWait(Duration.ofMinutes(2)).build());  // 手机上输入 PIN2
+// r.data()、r.signer().etsi()、r.photo() …——已由 EidQr.verify 验证（见上文“我的 QR”）
+```
+
+`check(qs, serverPoll)` 是单次长轮询；`verify(jws, qs)` 验证您已持有的 JWS。`EidClient.Builder.qrTrust` / `qrIssuer`
+可覆盖 trust 与签发者。
+
+### 为 PDF 加盖电子印章（`EidPades.sealPdf`）
+
+```java
+Completed sealed = EidPades.sealPdf(eid.seal(), "NTRMN-1234567", pdf, SealOptions.builder().invisible(true).build());
+```
+
+**本版本仅支持不可见印章**：可见印章图案与带 QR 的印章需等待 PAdES 引擎追上 golden v12 / v13；`invisible(false)`
+（默认）会在不访问网络的情况下抛出 `REQUEST_INVALID`。
 
 ### “使用 eID 登录”按钮后端（`mn.eidmongolia.eid.login`）
 
-浏览器 `<eid-login-button>`（TS SDK）的后端——JSON、cookie 与状态码同 Go `eidlogin` / TS `createEidLogin`（通过 `eidlogin/1` 一致性语料的全部 24 个场景）。`EidLogin.handle(EidLoginRequest)` 与框架无关；JDK 服务器用 `EidLoginHttpHandler`，Servlet / Spring 见下例。推送不会泄露号码是否已注册（诱饵会话、1 秒下限）；cookie 为 HttpOnly + Secure + SameSite=Lax；状态保存在服务器（`EidLoginStore`，默认内存）；默认启用 OCSP 吊销检查（soft-fail）。
+浏览器 `<eid-login-button>`（TS SDK）的后端——JSON、cookie 与状态码同 Go `eidlogin` / TS `createEidLogin`（通过 `eidlogin/1` 一致性语料的全部 24 个场景）。`EidLogin.handle(EidLoginRequest)` 与框架无关；JDK 服务器用 `EidLoginHttpHandler`，Servlet / Spring 见下例。推送不会泄露号码是否已注册（诱饵会话、1 秒下限）；cookie 为 HttpOnly + Secure + SameSite=Lax；状态保存在服务器（`EidLoginStore`，默认内存）；默认启用 OCSP 吊销检查（soft-fail——见上文）。
 
 ```java
 EidLogin login = EidLogin.builder(eid)                      // eid = EidClient（trust：含国家根证书的 TrustConfig）
@@ -270,6 +387,38 @@ EidLogin login = EidLogin.builder(eid)
 
 按号码的 push 限流（每个号码每分钟 3 次）仅以号码为键：任何知道公民身份号的人都可以耗尽该窗口，使该公民的 **push** 登录
 最多延迟一分钟——这是按号码推送的固有特性；QR 与 Web2App 不受影响。
+
+### 支持矩阵（与 Go / TypeScript SDK 对比）
+
+| 功能 | Java 0.2.0 |
+|---|---|
+| 客户端、mTLS、错误、每天与线上 discovery 对照的路由表 | ✓ |
+| 认证推送 / device link、QR ticker、ACSP_V2、interactions | ✓ |
+| Session poll / waitForResult | ✓ |
+| 签名（推送、device link、linked、文本）、证书选择 | ✓ |
+| 验证器（认证、签名、证书选择）、根证书、OCSP 检查器、subject | ✓ |
+| PDF 签名登记（`POST /pdf/signatures`） | ✓ |
+| 组织、个人（PKI_READ）、e-Seal（证书、授权、摘要盖章）、令牌、分享 | ✓ |
+| 我的 QR parse / verify / start / result / check | ✓ |
+| 登录按钮后端（JDK 适配器；Servlet / Spring 示例） | ✓ |
+| PAdES prepare / complete / suggestPlacement / 登记请求体 | ✓ |
+| `sealPdf` | 仅不可见——可见 / 带 QR 的印章等待 golden v12 / v13 |
+| ValidatePDF（验证已签名 PDF） | 尚未支持 |
+| 印章登记（`POST /v3/seal/{org}/registrations`） | 尚未支持（目前任何 SDK 都没有） |
+
+### 从 0.1.x 迁移
+
+- 坐标、jar 的 `Automatic-Module-Name`（`mn.eidmongolia.eid.pades`——为兼容而保持不变，尽管 jar 现在还包含
+  `mn.eidmongolia.eid`、`.login` 与 `.internal`）以及 `mn.eidmongolia.eid.pades` 的公共 API 均未改变：0.2.0 只做新增
+  （`EidPades.sealPdf`、`Sealer`、`SealOptions`、`EidQrException.TOKEN_INVALID` / `PENDING` / `PRESENTATION_GONE` 以及带
+  cause 的构造函数）。基于 0.1.1 编写的代码无需修改即可编译和链接（新增类型的常见注意事项：新的 `Sealer` / `SealOptions`
+  名称在两个通配符 import 下可能与其他库的同名类型冲突）。
+- `mn.eidmongolia.eid.internal` 仅为 SDK 自身的包而公开——不是 API，任何版本都可能改变。
+- 行为变化（更严格，安全相关）：我的 QR 将 OCSP `unknown` 视为已吊销（`QR_CERT_REVOKED`，此前为
+  `QR_REVOCATION_UNKNOWN`），并接受最多 48 小时前的 OCSP 应答（此前为 24 小时）；证书必须为严格 DER（见
+  [CHANGELOG.md](CHANGELOG.md) 中 0.2.0 的安全说明）；拒绝 SHA-1 链签名与小于 2048 位的 RSA 密钥；OCSP CertID 必须与
+  签发者一致；subject 中 SERIALNUMBER / CN 重复的证书会被拒绝。
+- 如果您此前自行通过 HTTPS/JSON 调用 RP-API，可以逐步迁移到 `EidClient`——线上格式相同。
 
 ## 开发
 
