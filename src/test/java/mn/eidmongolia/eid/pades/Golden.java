@@ -5,6 +5,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.Date;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Text;
 
 /** Vendored golden vectors (classpath `/golden/…`). */
 final class Golden {

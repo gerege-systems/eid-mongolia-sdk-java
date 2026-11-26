@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * /DSS revision (R_dss) — Go reference `pades/internal/core/dss.go`. Keeps every old DSS entry, reuses byte-identical

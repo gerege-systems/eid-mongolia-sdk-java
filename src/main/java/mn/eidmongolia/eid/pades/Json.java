@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * Minimal strict RFC 8259 JSON reader/writer (no dependency). Objects keep member order and duplicates (the last one

@@ -1,25 +1,25 @@
-package mn.eidmongolia.eid.pades;
+package mn.eidmongolia.eid.internal;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 
 /** Byte/text helpers with Go semantics (hex, base64, TrimSpace, ASN.1 strings). Every charset is explicit. */
-final class Text {
+public final class Text {
     private Text() {
     }
 
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
-    static byte[] latin1(String s) {
+    public static byte[] latin1(String s) {
         return s.getBytes(StandardCharsets.ISO_8859_1);
     }
 
-    static byte[] utf8(String s) {
+    public static byte[] utf8(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
     /** Lowercase hex. */
-    static String hex(byte[] b) {
+    public static String hex(byte[] b) {
         char[] c = new char[b.length * 2];
         for (int i = 0; i < b.length; i++) {
             c[2 * i] = HEX[(b[i] >> 4) & 0xf];
@@ -29,12 +29,12 @@ final class Text {
     }
 
     /** PDF hex string «<…>», lowercase. */
-    static String hexString(byte[] raw) {
+    public static String hexString(byte[] raw) {
         return "<" + hex(raw) + ">";
     }
 
     /** -1 when [c] is not a hex digit. */
-    static int hexVal(int c) {
+    public static int hexVal(int c) {
         if (c >= 0x30 && c <= 0x39) return c - 0x30;
         if (c >= 0x41 && c <= 0x46) return c - 0x41 + 10;
         if (c >= 0x61 && c <= 0x66) return c - 0x61 + 10;
@@ -42,7 +42,7 @@ final class Text {
     }
 
     /** Strict even-length hex decode of b[from, to); null on any non-hex char. */
-    static byte[] unhex(byte[] b, int from, int to) {
+    public static byte[] unhex(byte[] b, int from, int to) {
         if ((to - from) % 2 != 0) return null;
         byte[] out = new byte[(to - from) / 2];
         for (int i = 0; i < out.length; i++) {
@@ -54,7 +54,7 @@ final class Text {
         return out;
     }
 
-    static byte[] unhex(String s) {
+    public static byte[] unhex(String s) {
         byte[] b = latin1(s);
         byte[] out = unhex(b, 0, b.length);
         if (out == null) throw new IllegalArgumentException("hex");
@@ -64,12 +64,12 @@ final class Text {
     private static final String B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     /** RFC 4648 standard base64 with padding (Go encoding/json []byte). */
-    static String base64(byte[] b) {
+    public static String base64(byte[] b) {
         return java.util.Base64.getEncoder().encodeToString(b);
     }
 
     /** Decodes standard base64, ignoring whitespace (PEM bodies), stopping at '='. */
-    static byte[] unbase64(String s) {
+    public static byte[] unbase64(String s) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(s.length() * 3 / 4);
         int v = 0;
         int bits = 0;
@@ -90,7 +90,7 @@ final class Text {
     }
 
     /** Go `unicode.IsSpace`. */
-    static boolean isSpace(int c) {
+    public static boolean isSpace(int c) {
         switch (c) {
             case 0x09: case 0x0a: case 0x0b: case 0x0c: case 0x0d: case 0x20: case 0x85: case 0xa0: case 0x1680:
             case 0x2028: case 0x2029: case 0x202f: case 0x205f: case 0x3000:
@@ -101,7 +101,7 @@ final class Text {
     }
 
     /** Go `strings.TrimSpace`. */
-    static String trimSpace(String s) {
+    public static String trimSpace(String s) {
         int a = 0;
         int b = s.length();
         while (a < b && isSpace(s.codePointAt(a))) a += Character.charCount(s.codePointAt(a));
@@ -110,7 +110,7 @@ final class Text {
     }
 
     /** ASN.1 directory string → String (Go pkix value decoding for the string types X.509 names use). */
-    static String asn1(Der.Tlv t) {
+    public static String asn1(Der.Tlv t) {
         switch (t.tag) {
             case Der.BMP_STRING:
                 return new String(t.value(), StandardCharsets.UTF_16BE);
@@ -124,7 +124,7 @@ final class Text {
     }
 
     /** Lone surrogates make a string invalid UTF-8 in Go. */
-    static boolean validSurrogates(String s) {
+    public static boolean validSurrogates(String s) {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (Character.isHighSurrogate(c)) {

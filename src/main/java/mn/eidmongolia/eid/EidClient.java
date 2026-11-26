@@ -27,9 +27,9 @@ import java.util.regex.Pattern;
  * <p>Calls are blocking (fine on virtual threads); {@link Thread#interrupt()} cancels a call in flight
  * ({@link EidException.Network#cancelled()}). Thread-safe — share one instance.
  *
- * <p>Services: {@link #auth()}, {@link #sign()} (incl. certificate choice), {@link #session()}, {@link #pdf()}; crypto
- * helpers {@link Acsp}, {@link DeviceLink}, {@link EidCrypto}. In progress: the validator and the remaining services
- * follow.
+ * <p>Services: {@link #auth()}, {@link #sign()} (incl. certificate choice), {@link #session()}, {@link #pdf()},
+ * {@link #validator()} (trust: {@link Builder#trust}; revocation: {@link OcspRevocationChecker}); crypto helpers
+ * {@link Acsp}, {@link DeviceLink}, {@link EidCrypto}. In progress: the remaining services follow.
  */
 public final class EidClient {
     /** The official RP-API host (all RPs since 2026-09-28, no /v3); mTLS RPs too. */
@@ -56,6 +56,7 @@ public final class EidClient {
     private final SignService sign;
     private final SessionService session;
     private final PdfService pdf;
+    private final ResponseValidator validator;
 
     private EidClient(Builder b) {
         if (b.credentials.apiSecret().isEmpty()) throw new IllegalArgumentException("eid: Credentials.apiSecret шаардлагатай");
@@ -72,6 +73,7 @@ public final class EidClient {
         this.sign = new SignService(http, credentials, defaultCertificateLevel, signSessionTtl, clock);
         this.session = new SessionService(http, clock);
         this.pdf = new PdfService(http, pdfTimeout);
+        this.validator = new ResponseValidator(b.trust, clock);
     }
 
     private static Duration positiveOr(Duration d, Duration def) {
@@ -100,6 +102,14 @@ public final class EidClient {
     /** PDF signature registration (POST /pdf/signatures). */
     public PdfService pdf() {
         return pdf;
+    }
+
+    /**
+     * The response validator built from {@link Builder#trust} (Go {@code Client.Validator}): validateAuth, validateSign,
+     * validateCertificateChoice, checkRevocation.
+     */
+    public ResponseValidator validator() {
+        return validator;
     }
 
     /** Credentials.rpName — the RP name shown on the citizen's phone. */
@@ -232,6 +242,7 @@ public final class EidClient {
         private String language;
         private EidTransport transport;
         private Clock clock;
+        private TrustConfig trust;
 
         private Builder(Credentials credentials) {
             this.credentials = Objects.requireNonNull(credentials, "credentials");
@@ -279,6 +290,16 @@ public final class EidClient {
             return this;
         }
 
+        /**
+         * The validator's trust configuration ({@link #validator()}). Production needs
+         * {@code TrustConfig.builder().trustAnchorsPem(Roots.NATIONAL_ROOT_CA_PEM)}; null = no anchor (every validation
+         * fails, fail-closed).
+         */
+        public Builder trust(TrustConfig v) {
+            trust = v;
+            return this;
+        }
+
         /** The clock for receivedAt, computed expiry and waitForResult deadlines (tests). null = the system clock. */
         Builder clock(Clock v) {
             clock = v;
@@ -286,7 +307,7 @@ public final class EidClient {
         }
 
         /**
-         * @throws IllegalArgumentException empty API secret or an unacceptable base URL
+         * @throws IllegalArgumentException empty API secret, an unacceptable base URL, or a trust PEM / issuer SKI that does not parse
          */
         public EidClient build() {
             return new EidClient(this);

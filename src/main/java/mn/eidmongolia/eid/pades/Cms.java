@@ -8,6 +8,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Sig;
+import mn.eidmongolia.eid.internal.Text;
 
 /** CMS SignedData (CAdES baseline, detached) — Go reference `pades/internal/core/cms.go`, byte for byte. */
 final class Cms {

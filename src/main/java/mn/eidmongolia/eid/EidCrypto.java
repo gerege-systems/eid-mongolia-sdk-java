@@ -79,6 +79,28 @@ public final class EidCrypto {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(digest("SHA-256", utf8(verifier)));
     }
 
+    /**
+     * A signature over an ACSP_V2 payload (Go {@code VerifyPayloadSignature}): HASH_hash(payload) checked by
+     * {@link #verifyPrehashedSignature}.
+     *
+     * @param alg the response's signatureAlgorithm (rsassa-pss, shaNNNWithRSAEncryption, ecdsa-with-SHA256)
+     * @param hash "SHA-256" | "SHA-384" | "SHA-512"; anything else → false
+     */
+    public static boolean verifyPayloadSignature(byte[] payload, String sigB64, java.security.PublicKey pub, String alg, String hash) {
+        if (Prehashed.hashLen(hash) == 0 || payload == null) return false;
+        return Prehashed.verify(digest(hash, payload), sigB64, pub, alg, hash);
+    }
+
+    /**
+     * A signature over a ready digest (Go {@code VerifyPrehashedSignature}, TS {@code verifyPrehashedSignature}):
+     * rsassa-pss (MGF1 with the same hash, salt = hLen), shaNNNWithRSAEncryption (PKCS#1 v1.5), ecdsa-with-SHA256 (P-256,
+     * SHA-256, ASN.1 DER — not IEEE P1363). A key type that does not fit the algorithm, or a digest whose length is not
+     * the hash's → false.
+     */
+    public static boolean verifyPrehashedSignature(byte[] digest, String sigB64, java.security.PublicKey pub, String alg, String hash) {
+        return Prehashed.verify(digest, sigB64, pub, alg, hash);
+    }
+
     /** Go certchoice.go decodeSessionSecret: standard base64, else base64url (padded or not); non-empty. */
     static byte[] decodeSessionSecret(String s) {
         s = s == null ? "" : s.trim();

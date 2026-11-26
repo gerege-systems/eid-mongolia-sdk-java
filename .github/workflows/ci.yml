@@ -49,6 +49,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/sync-pades-golden.sh --check
 
+  conformance-sync:
+    # The vendored RP conformance corpus = the Go repo commit in conformance/SOURCE (byte for byte, pki/keys excluded).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/sync-conformance.sh --check
+
   changelog:
     # Every PR adds a changelog.d/ fragment; CHANGELOG.md is edited only on release/* branches.
     if: github.event_name == 'pull_request'

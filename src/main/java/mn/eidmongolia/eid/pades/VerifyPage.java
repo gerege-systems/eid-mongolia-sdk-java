@@ -7,6 +7,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 
 /** Fixed font asset (PAGE_SPEC §9): FontFile2 bytes as shipped (zlib, never re-compressed) + metrics. Immutable. */
 final class PageFont {

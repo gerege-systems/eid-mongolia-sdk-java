@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TimeZone;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 
 /** Go reference `pades/internal/core/signature.go`: the signature revision (R_sig), CMS embedding, text strings. */
 final class SignatureRevision {

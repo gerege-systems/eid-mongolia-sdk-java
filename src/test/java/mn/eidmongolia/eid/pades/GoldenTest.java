@@ -17,6 +17,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Ocsp;
+import mn.eidmongolia.eid.internal.Text;
 import org.junit.Test;
 
 /**

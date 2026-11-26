@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import mn.eidmongolia.eid.internal.Text;
 
 /** PDF object lexer/parser (ISO 32000-1 §7.3) — the digitorus/pdf subset the Go writer uses. */
 final class PdfLexer {

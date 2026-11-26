@@ -12,6 +12,8 @@ import java.util.Locale;
 import java.util.TimeZone;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * Native signing path — Go reference `pades/prepare.go` + `pades/complete.go` (profile pades-client/1) without the

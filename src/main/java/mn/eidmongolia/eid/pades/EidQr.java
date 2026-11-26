@@ -14,13 +14,18 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import mn.eidmongolia.eid.EidException;
+import mn.eidmongolia.eid.OcspRevocationChecker;
+import mn.eidmongolia.eid.RevocationStatus;
+import mn.eidmongolia.eid.internal.Cert;
+import mn.eidmongolia.eid.internal.Der;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * «Миний QR» (contract {@code myqr-2026-10-26}): the citizen shows {@code EIDMN-QR1:<token>} in the eID app → the RP
@@ -92,7 +97,8 @@ public final class EidQr {
      * @param anchors            trusted roots (null/empty = the embedded Mongolian National Root CA)
      * @param intermediates      intermediate CAs (null = the embedded 02–05); x5c[1] is always only an intermediate candidate
      * @param allowedIssuerSkis  SKI (hex, ":" allowed) of the CA that issued the leaf (null/empty = {@link #CITIZEN_ISSUING_CA_SKI})
-     * @param revocation         null = the leaf's AIA OCSP (hard-fail)
+     * @param revocation         null = the leaf's AIA OCSP via {@link mn.eidmongolia.eid.OcspRevocationChecker} (hard-fail;
+     *                           OCSP «unknown» = revoked, thisUpdate within 48 h — the Go / TS rule)
      * @param revocationSoftFail true accepts "unknown"
      */
     public record Trust(List<X509Certificate> anchors, List<X509Certificate> intermediates, List<String> allowedIssuerSkis,
@@ -340,22 +346,24 @@ public final class EidQr {
         }
     }
 
-    /** Default revocation: the leaf's AIA OCSP (CertID, signature, responder, freshness). No answer → "unknown". */
+    /** The shared default checker (its cache spans calls), created on first use. */
+    private static final class DefaultOcsp {
+        static final OcspRevocationChecker CHECKER = OcspRevocationChecker.create();
+    }
+
+    /**
+     * Default revocation: the leaf's AIA OCSP by the RP SDK's {@link OcspRevocationChecker} — the Go {@code qrRevocation}
+     * + {@code NewOCSPChecker} rule: OCSP «unknown» (the issuer never issued that serial) counts as revoked, thisUpdate
+     * must be within 48 h (+5 min skew), 2 s / 3 s timeouts. No acceptable answer → "unknown". (Before 0.2.0 this used the
+     * PAdES LTV rule: «unknown» → QR_REVOCATION_UNKNOWN and a 24 h window; the LTV rule itself is unchanged.)
+     */
     static String defaultRevocation(Cert leaf, Cert issuer) {
-        Fetcher f = new Fetcher(DefaultHttp.INSTANCE);
-        for (String url : leaf.ocspServers()) {
-            try {
-                byte[] der = f.post(url, "application/ocsp-request", Ocsp.request(leaf, issuer));
-                Ocsp.Response resp = Ocsp.parseForCert(der, leaf, issuer);
-                if (!Ocsp.responderOk(resp, issuer) || !Ocsp.certIdMatches(der, leaf, issuer)) continue;
-                if (resp.status == Ocsp.REVOKED) return "revoked";
-                Date n = new Date();
-                if (resp.status == Ocsp.GOOD && Revocation.freshAt(resp.thisUpdate, resp.nextUpdate, n, n)) return "good";
-            } catch (Exception e) {
-                // next responder
-            }
+        try {
+            RevocationStatus s = DefaultOcsp.CHECKER.check(leaf.x509, issuer.x509);
+            return s == RevocationStatus.GOOD ? "good" : s == RevocationStatus.REVOKED ? "revoked" : "unknown";
+        } catch (EidException e) {
+            return "unknown";
         }
-        return "unknown";
     }
 
     private static final class Checked {

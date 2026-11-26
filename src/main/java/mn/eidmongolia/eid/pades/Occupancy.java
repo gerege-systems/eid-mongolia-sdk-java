@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * Occupancy scanner — PLACEMENT_SPEC.md §3–§5, 1:1 port of the Go reference `pades/internal/core/occupancy.go`. A pure

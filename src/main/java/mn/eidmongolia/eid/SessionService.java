@@ -104,9 +104,9 @@ public final class SessionService {
      * @return {@code r}
      */
     public static SessionResult requireOk(SessionResult r) {
-        if (r == null) throw new EidException.Validation("хариу алга");
+        if (r == null) throw new EidException.Validation(ValidationReasons.SESSION_NOT_COMPLETE, "хариу алга");
         if (!SessionResult.STATE_COMPLETE.equals(r.state())) {
-            throw new EidException.Validation("session дуусаагүй (state=" + r.state() + ")");
+            throw new EidException.Validation(ValidationReasons.SESSION_NOT_COMPLETE, "session дуусаагүй (state=" + r.state() + ")");
         }
         if (!SessionResult.END_RESULT_OK.equals(r.endResult())) {
             throw new EidException.SessionFailed(r.endResult().isEmpty() ? "UNKNOWN" : r.endResult());

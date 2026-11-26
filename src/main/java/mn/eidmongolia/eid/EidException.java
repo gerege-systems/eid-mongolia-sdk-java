@@ -466,23 +466,111 @@ public class EidException extends RuntimeException {
 
     /**
      * Response validation failed: untrusted chain, signature does not match the challenge/digest, insufficient
-     * certLevel, … Do NOT trust the response.
+     * certLevel, … Do NOT trust the response. {@link #reason()} is a stable key ({@link ValidationReasons}, the
+     * conformance corpus keys); the message is prose.
      */
     public static final class Validation extends EidException {
         private static final long serialVersionUID = 1L;
         private final String reason;
+        private final String detail;
 
-        Validation(String reason) {
-            this(reason, null);
+        Validation(String reason, String detail) {
+            this(reason, detail, null);
         }
 
-        Validation(String reason, Throwable cause) {
-            super("eid: баталгаажуулалт: " + reason, cause);
+        Validation(String reason, String detail, Throwable cause) {
+            super("eid: баталгаажуулалт: " + detail, cause);
             this.reason = reason;
+            this.detail = detail;
         }
 
+        /** The stable reason key ({@link ValidationReasons}), e.g. {@code chain.untrusted}. */
         public String reason() {
             return reason;
+        }
+
+        /** The human-readable reason (Mongolian prose; no personal data — certificates are named by serial). */
+        public String detail() {
+            return detail;
+        }
+    }
+
+    /**
+     * {@link OcspRevocationChecker} got no acceptable OCSP answer (Go {@code OCSPError}, {@code ErrOCSPNoAnswer}): the
+     * revocation status is UNKNOWN — the validator's {@link RevocationMode} decides (soft-fail → unchecked, hard-fail →
+     * {@link Validation} {@link ValidationReasons#REVOCATION_UNKNOWN} with this as the cause). No personal data in the
+     * message.
+     */
+    public static final class Ocsp extends EidException {
+        private static final long serialVersionUID = 1L;
+
+        /** Why there was no answer (Go {@code OCSPErrorKind}; {@link #wireName()} = the corpus {@code errorKind}). */
+        public enum Kind {
+            /** No http/https OCSP URL in the certificate's AIA. */
+            NO_RESPONDER("no_responder"),
+            /** The certificate or its issuer is missing. */
+            NO_ISSUER("no_issuer"),
+            /** 2 s per request / 3 s in total, or the call was interrupted. */
+            TIMEOUT("timeout"),
+            /** Other connection failures (DNS, TCP, TLS). */
+            NETWORK("network"),
+            /** HTTP status ≠ 200 ({@link #httpStatus()}), or a body over 16 KiB. */
+            HTTP_STATUS("http_status"),
+            /** OCSP responseStatus not successful (malformedRequest, tryLater, unauthorized, …). */
+            RESPONDER_STATUS("responder_status"),
+            /** The response does not parse. */
+            PARSE("parse"),
+            /** Bad response / responder-certificate signature, responder without id-kp-OCSPSigning or out of validity. */
+            SIGNATURE("signature"),
+            /** Signed but not acceptable: another serial, thisUpdate out of range, nextUpdate passed. */
+            INVALID("invalid");
+
+            private final String wire;
+
+            Kind(String wire) {
+                this.wire = wire;
+            }
+
+            public String wireName() {
+                return wire;
+            }
+        }
+
+        private final Kind kind;
+        private final String responder;
+        private final int httpStatus;
+
+        Ocsp(Kind kind, String responder, int httpStatus, String detail, Throwable cause) {
+            super("eid: OCSP " + kind.wireName() + (responder == null || responder.isEmpty() ? "" : " (" + responder + ")")
+                + (detail == null || detail.isEmpty() ? "" : ": " + detail), cause);
+            this.kind = kind;
+            this.responder = responder == null ? "" : responder;
+            this.httpStatus = httpStatus;
+        }
+
+        public Kind kind() {
+            return kind;
+        }
+
+        /** The responder URL tried ("" when there was none). */
+        public String responder() {
+            return responder;
+        }
+
+        /** The HTTP status for {@link Kind#HTTP_STATUS}; else 0. */
+        public int httpStatus() {
+            return httpStatus;
+        }
+
+        @Override
+        public int status() {
+            return httpStatus;
+        }
+
+        /** The kind's wire name, e.g. "timeout". */
+        @Override
+        public String code() {
+            return kind.wireName();
         }
     }
 

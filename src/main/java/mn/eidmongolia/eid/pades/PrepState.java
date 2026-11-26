@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * Opaque prepare → complete state. Same layout as the Go reference (`pades/state.go`): "EIDPADES1" ‖ uint32 BE header

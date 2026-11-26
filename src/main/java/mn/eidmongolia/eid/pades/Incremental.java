@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import mn.eidmongolia.eid.internal.Text;
 
 /**
  * One incremental update (revision): output = base + "\n" + new objects + xref + trailer; base bytes never change. 1:1

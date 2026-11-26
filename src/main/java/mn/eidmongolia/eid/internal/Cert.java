@@ -1,4 +1,4 @@
-package mn.eidmongolia.eid.pades;
+package mn.eidmongolia.eid.internal;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigInteger;
@@ -20,21 +20,21 @@ import java.util.regex.Pattern;
  * X.509 certificate with the raw DER fields the Go reference compares byte-wise (RawIssuer, RawSubject, serial, SPKI) —
  * parsed here, never re-encoded by the platform. Crypto goes through `java.security`.
  */
-final class Cert {
-    static final String OID_AIA = "1.3.6.1.5.5.7.1.1";
-    static final String OID_AD_OCSP = "1.3.6.1.5.5.7.48.1";
-    static final String OID_CRL_DP = "2.5.29.31";
-    static final String OID_EKU = "2.5.29.37";
-    static final String OID_ANY_EKU = "2.5.29.37.0";
-    static final String OID_SERIAL_NUMBER = "2.5.4.5";
-    static final String OID_BASIC_CONSTRAINTS = "2.5.29.19";
-    static final String OID_SKI = "2.5.29.14";
-    static final String OID_AKI = "2.5.29.35";
+public final class Cert {
+    public static final String OID_AIA = "1.3.6.1.5.5.7.1.1";
+    public static final String OID_AD_OCSP = "1.3.6.1.5.5.7.48.1";
+    public static final String OID_CRL_DP = "2.5.29.31";
+    public static final String OID_EKU = "2.5.29.37";
+    public static final String OID_ANY_EKU = "2.5.29.37.0";
+    public static final String OID_SERIAL_NUMBER = "2.5.4.5";
+    public static final String OID_BASIC_CONSTRAINTS = "2.5.29.19";
+    public static final String OID_SKI = "2.5.29.14";
+    public static final String OID_AKI = "2.5.29.35";
     /** X509Certificate.getKeyUsage() indices. */
-    static final int KU_CERT_SIGN = 5;
-    static final int KU_CRL_SIGN = 6;
-    static final String OID_KP_TIMESTAMPING = "1.3.6.1.5.5.7.3.8";
-    static final String OID_KP_OCSP_SIGNING = "1.3.6.1.5.5.7.3.9";
+    public static final int KU_CERT_SIGN = 5;
+    public static final int KU_CRL_SIGN = 6;
+    public static final String OID_KP_TIMESTAMPING = "1.3.6.1.5.5.7.3.8";
+    public static final String OID_KP_OCSP_SIGNING = "1.3.6.1.5.5.7.3.9";
 
     private static final class Ext {
         final String oid;
@@ -48,13 +48,15 @@ final class Cert {
         }
     }
 
-    final byte[] raw;
-    final X509Certificate x509;
-    final byte[] rawIssuer;
-    final byte[] rawSubject;
-    final BigInteger serial;
+    public final byte[] raw;
+    public final X509Certificate x509;
+    public final byte[] rawIssuer;
+    public final byte[] rawSubject;
+    public final BigInteger serial;
     /** SubjectPublicKeyInfo.subjectPublicKey BIT STRING contents without the unused-bits byte (OCSP issuerKeyHash). */
-    final byte[] publicKeyBits;
+    public final byte[] publicKeyBits;
+    /** The SubjectPublicKeyInfo element as encoded (Go {@code RawSubjectPublicKeyInfo}). */
+    public final byte[] rawSubjectPublicKeyInfo;
     private final List<Ext> extensions = new ArrayList<>();
     private final List<String[]> subjectAttrs;
     private final List<String[]> issuerAttrs;
@@ -70,7 +72,9 @@ final class Cert {
         i++; // validity
         Der.Tlv subject = f.get(i++);
         rawSubject = subject.encoded();
-        Der.Tlv bits = f.get(i++).child(1);
+        Der.Tlv spki = f.get(i++);
+        rawSubjectPublicKeyInfo = spki.encoded();
+        Der.Tlv bits = spki.child(1);
         publicKeyBits = Arrays.copyOfRange(bits.buf, bits.valueStart + 1, bits.end);
         for (int k = i; k < f.size(); k++) {
             if (f.get(k).tag != Der.ctx(3)) continue;
@@ -85,7 +89,7 @@ final class Cert {
         issuerAttrs = nameAttrs(Der.parse(rawIssuer));
     }
 
-    static Cert parse(byte[] der) {
+    public static Cert parse(byte[] der) {
         try {
             X509Certificate x = (X509Certificate) CertificateFactory.getInstance("X.509")
                 .generateCertificate(new ByteArrayInputStream(der));
@@ -101,28 +105,28 @@ final class Cert {
     private static final Pattern PEM = Pattern.compile("-----BEGIN CERTIFICATE-----([^-]+)-----END CERTIFICATE-----");
 
     /** PEM CERTIFICATE blocks → DER (resources / test fixtures). */
-    static List<byte[]> pemBlocks(String pem) {
+    public static List<byte[]> pemBlocks(String pem) {
         List<byte[]> out = new ArrayList<>();
         Matcher m = PEM.matcher(pem);
         while (m.find()) out.add(Text.unbase64(m.group(1)));
         return out;
     }
 
-    static byte[] pemSingle(byte[] pemAscii) {
+    public static byte[] pemSingle(byte[] pemAscii) {
         List<byte[]> b = pemBlocks(new String(pemAscii, StandardCharsets.US_ASCII));
         if (b.size() != 1) throw new IllegalArgumentException("expected one PEM certificate");
         return b.get(0);
     }
 
-    PublicKey publicKey() {
+    public PublicKey publicKey() {
         return x509.getPublicKey();
     }
 
-    boolean isRsa() {
+    public boolean isRsa() {
         return publicKey() instanceof RSAPublicKey;
     }
 
-    boolean isEc() {
+    public boolean isEc() {
         return publicKey() instanceof ECPublicKey;
     }
 
@@ -137,7 +141,7 @@ final class Cert {
     }
 
     /** The signature verifies with [issuer]'s key (Go `issuer.CheckSignature` — no CA checks; see [issuedBy]). */
-    boolean signedBy(Cert issuer) {
+    public boolean signedBy(Cert issuer) {
         try {
             x509.verify(issuer.publicKey());
             return true;
@@ -150,22 +154,22 @@ final class Cert {
      * Go `bytes.Equal(c.RawIssuer, issuer.RawSubject) && c.CheckSignatureFrom(issuer) == nil`: the issuer must be a CA
      * allowed to sign certificates (basicConstraints cA, keyUsage keyCertSign when present).
      */
-    boolean issuedBy(Cert issuer) {
+    public boolean issuedBy(Cert issuer) {
         return Arrays.equals(rawIssuer, issuer.rawSubject) && issuer.mayIssue(KU_CERT_SIGN) && signedBy(issuer);
     }
 
     /** basicConstraints extension present (Go `BasicConstraintsValid`). */
-    boolean basicConstraintsValid() {
+    public boolean basicConstraintsValid() {
         return extension(OID_BASIC_CONSTRAINTS) != null;
     }
 
     /** basicConstraints cA = true. */
-    boolean isCa() {
+    public boolean isCa() {
         return basicConstraintsValid() && x509.getBasicConstraints() >= 0;
     }
 
     /** pathLenConstraint; null = no limit (Go `MaxPathLen` -1). */
-    Integer maxPathLen() {
+    public Integer maxPathLen() {
         int v = x509.getBasicConstraints();
         return isCa() && v != Integer.MAX_VALUE ? v : null;
     }
@@ -174,7 +178,7 @@ final class Cert {
      * Go `CheckSignatureFrom` / `RevocationList.CheckSignatureFrom` parent checks: a v3 certificate needs basicConstraints
      * with cA = true (v1/v2 without the extension are accepted, like Go); a non-empty keyUsage must include [usageBit].
      */
-    boolean mayIssue(int usageBit) {
+    public boolean mayIssue(int usageBit) {
         if (x509.getVersion() == 3 && !basicConstraintsValid() || basicConstraintsValid() && !isCa()) return false;
         boolean[] ku = x509.getKeyUsage();
         if (ku == null) return true;
@@ -184,23 +188,23 @@ final class Cert {
     }
 
     /** Go `Verify` path-length rule: [intermediates] CA certificates below this one in the chain. */
-    boolean allowsPath(int intermediates) {
+    public boolean allowsPath(int intermediates) {
         Integer m = maxPathLen();
         return m == null || intermediates <= m;
     }
 
-    boolean validAt(Date at) {
+    public boolean validAt(Date at) {
         return !at.before(x509.getNotBefore()) && !at.after(x509.getNotAfter());
     }
 
     /** SubjectKeyIdentifier (empty if absent). */
-    byte[] subjectKeyId() {
+    public byte[] subjectKeyId() {
         byte[] v = extensionValue(OID_SKI);
         return v == null ? new byte[0] : Der.parse(v).value();
     }
 
     /** Errors name certificates by serial (Go `SerialNumber.Text(16)`), never by CN — the citizen's name is PII. */
-    String serialRef() {
+    public String serialRef() {
         return "serial " + serial.toString(16);
     }
 
@@ -210,19 +214,45 @@ final class Cert {
     }
 
     /** The extension's extnValue contents, or null. */
-    byte[] extensionValue(String oid) {
+    public byte[] extensionValue(String oid) {
         Ext e = extension(oid);
         return e == null ? null : e.value;
     }
 
-    int extensionCount(String oid) {
+    public int extensionCount(String oid) {
         int n = 0;
         for (Ext e : extensions) if (e.oid.equals(oid)) n++;
         return n;
     }
 
+    /** OIDs of the extensions marked critical, in certificate order. */
+    public List<String> criticalExtensionOids() {
+        List<String> out = new ArrayList<>();
+        for (Ext e : extensions) if (e.critical) out.add(e.oid);
+        return out;
+    }
+
+    /** AuthorityKeyIdentifier keyIdentifier [0] (empty if absent). */
+    public byte[] authorityKeyId() {
+        byte[] v = extensionValue(OID_AKI);
+        if (v == null) return new byte[0];
+        for (Der.Tlv k : Der.parse(v).children()) {
+            if (k.tag == Der.ctx(0, false)) return k.value();
+        }
+        return new byte[0];
+    }
+
+    /** certificatePolicies (2.5.29.32) policyIdentifier OIDs, in order (empty if absent). */
+    public List<String> policyIdentifiers() {
+        byte[] v = extensionValue("2.5.29.32");
+        if (v == null) return Collections.emptyList();
+        List<String> out = new ArrayList<>();
+        for (Der.Tlv pi : Der.parse(v).children()) out.add(pi.child(0).oid());
+        return out;
+    }
+
     /** AIA id-ad-ocsp URIs, in order (Go `OCSPServer`). */
-    List<String> ocspServers() {
+    public List<String> ocspServers() {
         byte[] v = extensionValue(OID_AIA);
         if (v == null) return Collections.emptyList();
         List<String> out = new ArrayList<>();
@@ -235,7 +265,7 @@ final class Cert {
     }
 
     /** CRL distribution point fullName URIs, in order (Go `CRLDistributionPoints`). */
-    List<String> crlDistributionPoints() {
+    public List<String> crlDistributionPoints() {
         byte[] v = extensionValue(OID_CRL_DP);
         if (v == null) return Collections.emptyList();
         List<String> out = new ArrayList<>();
@@ -257,7 +287,7 @@ final class Cert {
     }
 
     /** ExtendedKeyUsage OIDs (empty if absent). */
-    List<String> extKeyUsage() {
+    public List<String> extKeyUsage() {
         byte[] v = extensionValue(OID_EKU);
         if (v == null) return Collections.emptyList();
         List<String> out = new ArrayList<>();
@@ -266,7 +296,7 @@ final class Cert {
     }
 
     /** Go eidcrypto.IsTSASigningCert: exactly one EKU extension, critical, = {timeStamping}. */
-    boolean isTsaSigningCert() {
+    public boolean isTsaSigningCert() {
         if (extensionCount(OID_EKU) != 1) return false;
         Ext e = extension(OID_EKU);
         List<String> oids = new ArrayList<>();
@@ -279,25 +309,31 @@ final class Cert {
     }
 
     /** Go core.SignerDisplayName: GIVENNAME SURNAME (last of each wins), else CN. */
-    String displayName() {
+    public String displayName() {
         String given = lastAttr(subjectAttrs, "2.5.4.42");
         String sur = lastAttr(subjectAttrs, "2.5.4.4");
         String n = Text.trimSpace((given == null ? "" : given) + " " + (sur == null ? "" : sur));
         return n.isEmpty() ? commonName() : n;
     }
 
-    String commonName() {
+    public String commonName() {
         String v = lastAttr(subjectAttrs, "2.5.4.3");
         return v == null ? "" : v;
     }
 
     /** Subject attribute (last occurrence wins, like Go pkix.Name). */
-    String subjectAttr(String oid) {
+    public String subjectAttr(String oid) {
         return lastAttr(subjectAttrs, oid);
     }
 
+    /** Subject attribute, first occurrence (Go pkix.Name Country[0], Names scan), or null. */
+    public String subjectAttrFirst(String oid) {
+        for (String[] a : subjectAttrs) if (a[0].equals(oid)) return a[1];
+        return null;
+    }
+
     /** Go `cert.Issuer.CommonName`. */
-    String issuerCommonName() {
+    public String issuerCommonName() {
         String v = lastAttr(issuerAttrs, "2.5.4.3");
         return v == null ? "" : v;
     }
