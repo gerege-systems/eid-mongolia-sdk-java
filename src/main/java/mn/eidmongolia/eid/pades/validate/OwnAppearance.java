@@ -96,8 +96,6 @@ final class OwnAppearance {
         Object ms = dget(dict(sd), "M");
         // A hostile multi-megabyte /Name is kept out of the (quadratic) stamp text wrap.
         if (!(ns instanceof PStr) || !(ms instanceof PStr) || ((PStr) ns).v.length() > Revisions.OWN_TEXT_LIMIT) throw fail();
-        // The stamp's /Name = the signer certificate's display name (Go appearance.go ownVisible).
-        if (meta.name.isEmpty() || !Revisions.pdfTextString((PStr) ns).equals(meta.name)) throw fail();
         String m = ((PStr) ms).v;
         if (!Revisions.ownDate(m) || !m.substring(16).equals("+08'00'")) throw fail();
         String date = m.substring(2, 6) + "-" + m.substring(6, 8) + "-" + m.substring(8, 10) + " " + m.substring(10, 12) + ":"

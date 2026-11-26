@@ -363,8 +363,8 @@ KU/EKU、RFC 3161 时间戳、签名之后的修订（shadow / 追加的修改 �
 ≤ 32 MiB，对象流成员查找工作量（头部对数 × 解压长度）合计 ≤ 1 GiB——超出任一项即 `PDF_INVALID`；每个 CMS 或时间戳令牌
 ≤ 32 个证书、RSA ≤ 8192 位、e ≤ 2^32−1、证书 / TSTInfo 序列号 ≤ 160 位（否则 `malformed_signature`）；DSS 解码合计
 ≤ 8 MiB（同一数组中重复引用的流只读一次）。**集成方可见的变化：** 超过 128 次增量更新或对象流成员极多的文档 →
-`PDF_INVALID`；后续签名的可见印章 `/Name` 与该签名证书的名称（GIVENNAME SURNAME，否则 CN）不同，或该签名完整性校验失败时，
-之前的签名为 `modified_after_signing`；SignerInfo 使用 MD2/MD5/SHA-1 签名算法 → `weak_algorithm`。
+`PDF_INVALID`；后续签名完整性校验失败时，之前的签名为 `modified_after_signing`（后续可见印章的 `/Name` 不与其证书名称
+比较——语料库 v15；`signer_name` 取自证书，`claimed_name` 取自 `/Name`）；SignerInfo 使用 MD2/MD5/SHA-1 签名算法 → `weak_algorithm`。
 
 ### “使用 eID 登录”按钮后端（`mn.eidmongolia.eid.login`）
 

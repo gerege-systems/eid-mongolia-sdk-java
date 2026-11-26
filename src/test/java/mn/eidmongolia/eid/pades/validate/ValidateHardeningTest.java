@@ -462,7 +462,7 @@ public class ValidateHardeningTest {
         }
     }
 
-    // 12 — later-signature trust (Go extract.go known/metas, appearance.go /Name): corpus v14 inputs
+    // 12 — later-signature trust (Go extract.go known/metas): corpus v14 inputs, v15 expectations
 
     @Test
     public void laterSignatureMustVerifyToExtend() throws Exception {
@@ -479,30 +479,23 @@ public class ValidateHardeningTest {
         assertEquals(1, bad);
     }
 
+    // Corpus v15 (Go 9f68390 TestValidatePDFLaterStampNameNotCompared): the stamp's /Name is not compared with the
+    // certificate name — a mismatching /Name on an integrity-passing later signature does NOT flag earlier signatures.
     @Test
-    public void laterStampNameMustBeTheCertificateName() throws Exception {
-        byte[] control = res("validate/input/later-stamp-name-control.pdf");
-        byte[] mismatch = res("validate/input/later-stamp-name-mismatch.pdf");
-        // mismatch: the later signature verifies, but its /Name (and stamp) say GOLDEN TESTOV while its certificate is
-        // QUALIFIED TESTOV — the stamp check (OwnAppearance) compares against meta.name; the report is in the corpus.
-        Extract.Extracted mx = Extract.extract(mismatch, NO_STAMPS);
-        boolean seen = false;
-        for (Extract.RawSignature s : mx.sigs) {
-            assertTrue(s.integrity);
-            SigMeta m = mx.metas.get(s.objNum);
-            if (m.name.equals("QUALIFIED TESTOV")) {
-                assertEquals("GOLDEN TESTOV", s.signerName);
-                seen = true;
+    public void laterStampNameIsNotCompared() throws Exception {
+        for (String in : new String[] {"later-stamp-name-mismatch", "later-stamp-name-control"}) {
+            Extract.Extracted ex = Extract.extract(res("validate/input/" + in + ".pdf"), NO_STAMPS);
+            assertEquals(in, 2, ex.sigs.size());
+            Extract.RawSignature first = ex.sigs.get(0), later = ex.sigs.get(0);
+            for (Extract.RawSignature s : ex.sigs) {
+                assertTrue(in, s.integrity);
+                if (s.signedEnd < first.signedEnd) first = s;
+                if (s.signedEnd > later.signedEnd) later = s;
             }
+            assertTrue(in, ex.metas.containsKey(later.objNum));
+            assertTrue(in + ": extended by signatures only", first.laterSignaturesOnly);
+            assertEquals(in, 1, first.laterSignatures);
+            assertTrue(in + ": visible later signature", first.laterVisible);
         }
-        assertTrue(seen);
-        Extract.Extracted ex = Extract.extract(control, NO_STAMPS);
-        Extract.RawSignature last = ex.sigs.get(0);
-        for (Extract.RawSignature s : ex.sigs) if (s.signedEnd > last.signedEnd) last = s;
-        assertEquals("QUALIFIED TESTOV", last.signerName);
-        assertEquals(last.signerName, ex.metas.get(last.objNum).name);
-        assertEquals("QUALIFIED TESTOV", Extract.certDisplayName(Cert.pemSingle(res("validate/pki/citizen-qc.pem"))));
-        assertEquals("", Extract.certDisplayName(new byte[] {0x30, 0x00}));
-        assertEquals("", Extract.certDisplayName(null));
     }
 }
